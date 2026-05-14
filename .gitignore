@@ -1,0 +1,96 @@
+# ============================================================
+# Python
+# ============================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+
+# ============================================================
+# Virtual Environment
+# ============================================================
+venv/
+.venv/
+env/
+ENV/
+
+# ============================================================
+# Datasets (large, can be regenerated via prepare_dataset_v2.py)
+# ============================================================
+raw_datasets/
+dataset/
+dataset_v2/
+_staging_v2/
+
+# YOLO label cache files (auto-generated during training)
+*.cache
+
+# ============================================================
+# Model Weights
+# models/ IS tracked (weights are ~6MB each, safe for git)
+# Only ignore heavy third-party engine/runtime exports
+# ============================================================
+*.engine
+# Base pretrained weights (download separately from ultralytics)
+yolov8n.pt
+yolo26n.pt
+
+# ============================================================
+# Training Runs & Outputs (large, auto-generated)
+# ============================================================
+runs/
+output/
+
+# ============================================================
+# Jupyter Notebooks
+# ============================================================
+.ipynb_checkpoints/
+*.ipynb
+
+# ============================================================
+# OS Files
+# ============================================================
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Linux
+*~
+
+# ============================================================
+# IDE / Editor Files
+# ============================================================
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ============================================================
+# Environment & Secrets
+# ============================================================
+.env
+.env.*
+secrets.yaml
+
+# ============================================================
+# Misc
+# ============================================================
+*.log
+*.tmp

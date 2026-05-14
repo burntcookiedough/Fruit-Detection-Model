@@ -1,0 +1,17 @@
+# Fruit Detection Model - Dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+ultralytics>=8.1.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Dataset preparation
+roboflow>=1.1.0
+
+# Export & inference
+onnxruntime>=1.16.0
+
+# Optional: TFLite export (uncomment if needed)
+# tensorflow>=2.13.0
