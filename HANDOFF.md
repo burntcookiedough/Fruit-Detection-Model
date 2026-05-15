@@ -1,8 +1,8 @@
-# 🤝 Agent Handoff Document — Fruit Detection Model
-**Date:** 2026-05-14  
+# Handoff Document - Fruit Detection Model
+**Date:** 2026-05-15  
 **Project Root:** `f:\Fruit Detection Model\`  
 **Git Repo:** `burntcookiedough/Fruit-Detection-Model` (local, on main branch)  
-**Status:** ✅ Trained, benchmarked, committed. Ready for improvement or deployment.
+**Status:** Phase 5 complete. Webcam fix + dataset balance applied. Ready for retraining.
 
 ---
 
@@ -76,31 +76,36 @@ banana:      62.2%   (worst — look-alike with lighting)
 
 ```
 f:\Fruit Detection Model\
-├── demo.py                  ✅ Works. Internet + webcam modes. PyTorch 2.6 fix applied.
-├── train.py                 ✅ Works. Defaults to data_v2.yaml, 80 epochs, fruit_v2 run.
-├── evaluate.py              ✅ Works. PyTorch 2.6 fix applied.
-├── prepare_dataset.py       ✅ Works. (v1, for the old synthetic datasets)
-├── prepare_dataset_v2.py    ✅ Works. Downloads, unzips, merges, deduplicates, splits.
-├── data.yaml                ✅ For v1 synthetic dataset (dataset/)
-├── data_v2.yaml             ✅ For v2 real-world dataset (dataset_v2/) ← USE THIS
-├── requirements.txt         ✅ All deps listed
-├── .gitignore               ✅ Correct — excludes heavy files
-├── README.md                ✅ Full project documentation
-├── models/
-│   ├── best.pt              ✅ The CURRENT production model (v2, real-world trained)
-│   ├── best_v1.pt           📦 Old synthetic model — keep for comparison
-│   ├── best.onnx            ✅ ONNX export of v2 model (11.7MB, for deployment)
-│   └── last.pt              📦 Last epoch checkpoint from v2 training run
-├── export/
-│   ├── export_onnx.py       ✅ Works
-│   └── export_tflite.py     ✅ Works (requires tensorflow installed separately)
-├── inference/
-│   ├── image.py             ✅ Batch inference on local image files
-│   └── webcam.py            ✅ Standalone webcam inference script
-├── runs/fruit_v2/           🚫 Git-ignored. Contains training plots, confusion matrix.
-├── dataset_v2/              🚫 Git-ignored. Can regenerate with prepare_dataset_v2.py
-├── raw_datasets/            🚫 Git-ignored. Contains Kaggle ZIPs + extracted folders.
-└── venv/                    🚫 Git-ignored. Python 3.x virtual environment.
++-- balance_dataset.py       NEW. Balances class distribution (cap + augment).
++-- data_v3.yaml             NEW. Points to balanced dataset_v3/
++-- dataset_v3/              NEW (git-ignored). Balanced dataset ready to train.
+|-- demo.py                  UPDATED. Webcam now uses CLAHE + conf=0.15 default.
+|-- train.py                 UPDATED. Supports --augment flag for webcam training.
+|-- evaluate.py              Works. PyTorch 2.6 fix applied.
+|-- prepare_dataset.py       Works. (v1, for the old synthetic datasets)
+|-- prepare_dataset_v2.py    Works. Downloads, unzips, merges, deduplicates, splits.
+|-- data.yaml                For v1 synthetic dataset (dataset/)
+|-- data_v2.yaml             For v2 real-world dataset (dataset_v2/)
+|-- data_v3.yaml             NEW. For v3 balanced dataset (dataset_v3/) <- USE THIS
+|-- requirements.txt         All deps listed
+|-- .gitignore               Correct -- excludes heavy files
+|-- README.md                Full project documentation
+|-- models/
+|   |-- best.pt              The CURRENT production model (v2, real-world trained)
+|   |-- best_v1.pt           Old synthetic model -- keep for comparison
+|   |-- best.onnx            ONNX export of v2 model (11.7MB, for deployment)
+|   +-- last.pt              Last epoch checkpoint from v2 training run
+|-- export/
+|   |-- export_onnx.py       Works
+|   +-- export_tflite.py     Works (requires tensorflow installed separately)
+|-- inference/
+|   |-- image.py             Batch inference on local image files
+|   +-- webcam.py            Standalone webcam inference script
+|-- runs/fruit_v2/           Git-ignored. Contains training plots, confusion matrix.
+|-- dataset_v2/              Git-ignored. Can regenerate with prepare_dataset_v2.py
+|-- dataset_v3/              Git-ignored. Balanced version of dataset_v2.
+|-- raw_datasets/            Git-ignored. Contains Kaggle ZIPs + extracted folders.
++-- venv/                    Git-ignored. Python 3.x virtual environment.
 ```
 
 ---
@@ -205,55 +210,73 @@ python export/export_onnx.py
 
 ---
 
-## 8. Roadmap — What To Do Next (Prioritized)
+## 8. Roadmap -- What To Do Next (Prioritized)
 
-### Priority 1 — Fix Webcam Performance 🎯
-**Problem:** Training images are clean studio shots. Webcam is noisy, dark, in-scene.  
-**Solution options:**
-- Add **Roboflow "fruits in hand" / "fruits on table"** datasets — images that look like webcam frames
-- Apply heavy **augmentation** during training: brightness jitter, blur, noise, perspective
-- In `train.py`, add augmentation args: `hsv_h=0.015, hsv_s=0.7, blur=0.3, degrees=10`
+### Priority 0 -- RETRAIN with balanced dataset + augmentation [READY TO RUN]
 
-```python
-# In train.py model.train() call, add:
-hsv_h=0.015, hsv_s=0.7, hsv_v=0.4,
-degrees=10, translate=0.1, scale=0.5,
-blur=0.3, noise=0.01
-```
+Dataset v3 and train flags are already set up. Just run:
 
-### Priority 2 — More Mango & Pomegranate Data
-These are the most underrepresented classes.  
-**Sources to try:**
-- `kaggle datasets download -d sshikamaru/fruit-recognition` (has mango)
-- HuggingFace: search "mango detection dataset"
-- `prepare_dataset_v2.py` is already set up to merge new sources — just add them to the `dataset_dirs` list
-
-### Priority 3 — Export & Deploy
-The model is already ONNX-exported (`models/best.onnx`, 11.7MB).  
-Next: test on target hardware.
 ```powershell
-# For Raspberry Pi / Jetson Nano
-python export/export_tflite.py    # Requires tensorflow, produces .tflite
-
-# Test ONNX inference speed
-python -c "from ultralytics import YOLO; m=YOLO('models/best.onnx'); m.info()"
+venv\Scripts\activate
+python train.py --data data_v3.yaml --name fruit_v3 --epochs 100 --augment
 ```
 
-### Priority 4 — Push to GitHub/HuggingFace
+Expected improvements after retraining:
+- Mango/pomegranate mAP should rise 10-20% (more training examples)
+- Webcam detection should improve dramatically (augmentations simulate real conditions)
+
+### Priority 1 -- Webcam performance [PARTIALLY FIXED]
+**What was done (no retraining needed):**
+- `demo.py` now applies **CLAHE preprocessing** to every webcam frame before inference
+  - CLAHE boosts local contrast in LAB colour space -- handles dark rooms, backlit scenes
+- Default confidence lowered from 0.25 to **0.15** for webcam mode
+- Model warms up on a dummy frame so the first real frame is not slow
+
+**Remaining fix (needs retrain):**
+- Add the `--augment` flag when retraining (see Priority 0 above)
+
+```powershell
+# Run webcam NOW (with CLAHE fix, existing model)
+python demo.py --mode webcam
+
+# Even lower conf if still missing detections
+python demo.py --mode webcam --conf 0.10
+```
+
+### Priority 2 -- Dataset imbalance [FIXED]
+
+Dataset v3 has been created at `dataset_v3/` with these changes:
+
+| Class | v2 train boxes | v3 train boxes | Change |
+|-------|----------------|----------------|--------|
+| apple | 3,885 | 2,135 | Capped |
+| banana | 2,053 | 2,030 | Capped |
+| orange | 7,913 | 2,279 | Capped (-71%) |
+| mango | 191 | 592 | Augmented (+210%) |
+| pineapple | 1,065 | 1,114 | Kept |
+| watermelon | 1,550 | 1,550 | Kept |
+| grapes | 3,801 | 2,068 | Capped |
+| pomegranate | 170 | 500 | Augmented (+194%) |
+
+Augmentations applied to mango/pomegranate images: brightness/contrast jitter,
+Gaussian noise, blur, horizontal flip (with mirrored boxes), small rotation.
+
+### Priority 3 -- Export & Deploy
+The model is already ONNX-exported (`models/best.onnx`, 11.7MB).  
+After retraining v3, re-export:
+```powershell
+python export/export_onnx.py   # replaces models/best.onnx
+```
+
+### Priority 4 -- Push to GitHub/HuggingFace
 Currently only local git. To push:
 ```powershell
 git remote add origin https://github.com/YOUR_USERNAME/fruit-detection-model.git
 git push -u origin main
 ```
-For model weights on HuggingFace Hub:
-```python
-from huggingface_hub import HfApi
-api = HfApi()
-api.upload_file(path_or_fileobj="models/best.pt", path_in_repo="best.pt", repo_id="YOUR_USERNAME/fruit-detection")
-```
 
-### Priority 5 — Per-Class Confidence Thresholds
-Currently a global `--conf 0.25` threshold. Mango/pomegranate (low-data classes) might benefit from a lower threshold. Consider implementing per-class thresholds in `demo.py`.
+### Priority 5 -- Per-Class Confidence Thresholds
+Currently a global `--conf` threshold. After retraining, consider per-class thresholds in `demo.py`.
 
 ---
 

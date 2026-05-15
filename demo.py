@@ -99,16 +99,47 @@ def run_internet(model, url=None, conf=0.25, imgsz=640):
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
-def run_webcam(model, camera_id=0, conf=0.25, imgsz=640):
-    """Runs live inference on a connected webcam"""
+def preprocess_webcam_frame(frame):
+    """
+    Applies CLAHE (Contrast Limited Adaptive Histogram Equalisation) to improve
+    detection in dark or unevenly lit webcam frames.
+
+    CLAHE works in LAB colour space so it only touches luminance -- colours
+    remain natural but local contrast is dramatically improved.
+    """
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    l_eq = clahe.apply(l)
+    lab_eq = cv2.merge([l_eq, a, b])
+    return cv2.cvtColor(lab_eq, cv2.COLOR_LAB2BGR)
+
+
+def run_webcam(model, camera_id=0, conf=0.15, imgsz=640, enhance=True):
+    """Runs live inference on a connected webcam.
+
+    Args:
+        model       : Loaded YOLO model.
+        camera_id   : Camera index (default 0).
+        conf        : Confidence threshold.  Lower = more detections.
+                      0.10-0.20 works best for webcam.  Default: 0.15
+        imgsz       : Inference image size.  320 is faster; 640 is more accurate.
+        enhance     : Apply CLAHE preprocessing (helps a lot in dark rooms).
+    """
     cap = cv2.VideoCapture(camera_id)
     if not cap.isOpened():
         print(f"[ERROR] Cannot open camera with ID {camera_id}. Make sure it is connected and not used by another app.")
         return
 
+    # Warm up the model with a dummy frame so first real frame is fast
+    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    model(dummy, imgsz=imgsz, conf=conf, verbose=False)
+
     print(f"\n[INFO] Webcam started on camera {camera_id}.")
-    print(">>> PRESS 'q' in the video window to quit <<<")
-    
+    print(f"[INFO] Confidence threshold : {conf}  (lower = more detections)")
+    print(f"[INFO] CLAHE enhancement    : {'ON' if enhance else 'OFF'}")
+    print(">>>> PRESS 'q' in the video window to quit <<<<")
+
     fps_smooth = 0.0
 
     while True:
@@ -118,8 +149,13 @@ def run_webcam(model, camera_id=0, conf=0.25, imgsz=640):
             print("[ERROR] Frame capture failed")
             break
 
+        # Apply CLAHE to boost contrast in poor lighting
+        inference_frame = preprocess_webcam_frame(frame) if enhance else frame
+
         # Run inference
-        results = model(frame, imgsz=imgsz, conf=conf, verbose=False)
+        results = model(inference_frame, imgsz=imgsz, conf=conf, verbose=False)
+
+        # Annotate original (un-processed) frame so colours look natural
         annotated = annotate(frame, results)
 
         # Calculate and draw FPS
@@ -128,9 +164,11 @@ def run_webcam(model, camera_id=0, conf=0.25, imgsz=640):
         fps_smooth = 0.9 * fps_smooth + 0.1 * fps
         cv2.putText(annotated, f"FPS: {fps_smooth:.1f}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+        cv2.putText(annotated, f"conf={conf:.2f}", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 0), 1)
 
         cv2.imshow("Fruit Detection - Live Webcam", annotated)
-        
+
         # Press 'q' to quit
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
@@ -140,14 +178,32 @@ def run_webcam(model, camera_id=0, conf=0.25, imgsz=640):
     print("[INFO] Webcam stopped.")
 
 def main():
-    p = argparse.ArgumentParser(description="Fruit Detection Demo: Internet Images & Webcam")
-    p.add_argument("--mode", choices=["internet", "webcam"], default="internet", 
-                   help="Choose 'internet' to test an image URL, or 'webcam' for live camera.")
-    p.add_argument("--url", type=str, help="Specific image URL (for internet mode). If omitted, a random URL is picked.")
-    p.add_argument("--camera", type=int, default=0, help="Camera index (for webcam mode), usually 0 or 1.")
-    p.add_argument("--model", default="models/best.pt", help="Path to your trained YOLOv8 model")
-    p.add_argument("--conf", type=float, default=0.25, help="Confidence threshold to show boxes")
-    p.add_argument("--imgsz", type=int, default=640, help="Image size for inference")
+    p = argparse.ArgumentParser(
+        description="Fruit Detection Demo: Internet Images & Webcam",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python demo.py                                  # random internet image
+  python demo.py --mode webcam                    # webcam (CLAHE + conf=0.15)
+  python demo.py --mode webcam --conf 0.10        # lower conf = more detections
+  python demo.py --mode webcam --no-enhance       # disable CLAHE preprocessing
+  python demo.py --url https://...image.jpg       # specific URL
+"""
+    )
+    p.add_argument("--mode", choices=["internet", "webcam"], default="internet",
+                   help="'internet' to test an image URL, or 'webcam' for live camera.")
+    p.add_argument("--url", type=str,
+                   help="Specific image URL (internet mode). If omitted, a random URL is picked.")
+    p.add_argument("--camera", type=int, default=0,
+                   help="Camera index (webcam mode), usually 0 or 1.")
+    p.add_argument("--model", default="models/best.pt",
+                   help="Path to your trained YOLOv8 model (default: models/best.pt)")
+    p.add_argument("--conf", type=float, default=None,
+                   help="Confidence threshold. Default: 0.25 for internet, 0.15 for webcam.")
+    p.add_argument("--imgsz", type=int, default=640,
+                   help="Image size for inference (default: 640)")
+    p.add_argument("--no-enhance", dest="enhance", action="store_false", default=True,
+                   help="Disable CLAHE preprocessing for webcam mode (enabled by default)")
     args = p.parse_args()
 
     if not Path(args.model).exists():
@@ -159,9 +215,12 @@ def main():
     model = YOLO(args.model)
 
     if args.mode == "internet":
-        run_internet(model, args.url, args.conf, args.imgsz)
+        conf = args.conf if args.conf is not None else 0.25
+        run_internet(model, args.url, conf, args.imgsz)
     elif args.mode == "webcam":
-        run_webcam(model, args.camera, args.conf, args.imgsz)
+        conf = args.conf if args.conf is not None else 0.15
+        run_webcam(model, args.camera, conf, args.imgsz, enhance=args.enhance)
+
 
 if __name__ == "__main__":
     main()
