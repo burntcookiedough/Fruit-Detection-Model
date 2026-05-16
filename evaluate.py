@@ -1,10 +1,19 @@
 """
-Fruit Detection Model - Evaluation Script
-Runs the trained model on the held-out test set and prints metrics.
+evaluate.py — Fruit Detection Model: Evaluation entry point.
 
-Usage:
+Runs the trained model against a dataset split and prints per-class metrics.
+All defaults are inherited from config.py.
+
+Usage
+-----
+Evaluate on the test split (default):
     python evaluate.py
-    python evaluate.py --model models/best.pt --split test
+
+Evaluate on the validation split:
+    python evaluate.py --split val
+
+Evaluate a specific checkpoint:
+    python evaluate.py --model runs/fruit_v3/weights/best.pt
 """
 
 import argparse
@@ -13,85 +22,103 @@ from pathlib import Path
 import torch
 from ultralytics import YOLO
 
-# --- PyTorch 2.6 Compatibility Workaround ---
-_original_load = torch.load
-def _patched_load(*args, **kwargs):
-    kwargs['weights_only'] = False
-    return _original_load(*args, **kwargs)
-torch.load = _patched_load
+import config
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Evaluate fruit detection model")
-    parser.add_argument("--model", type=str, default="models/best.pt",
-                        help="Path to trained model (default: models/best.pt)")
-    parser.add_argument("--data", type=str, default="data.yaml",
-                        help="Path to data.yaml (default: data.yaml)")
-    parser.add_argument("--split", type=str, default="test",
-                        choices=["val", "test"],
-                        help="Dataset split to evaluate on (default: test)")
-    parser.add_argument("--imgsz", type=int, default=640,
-                        help="Input image size (default: 640)")
-    parser.add_argument("--device", type=str, default="0",
-                        help="Device (default: 0)")
-    parser.add_argument("--conf", type=float, default=0.25,
-                        help="Confidence threshold (default: 0.25)")
+def resolve_device(override: str | None) -> str:
+    """Return the best available device, respecting an explicit override."""
+    if override is not None:
+        return override
+    if torch.cuda.is_available():
+        return "0"
+    return "cpu"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Evaluate the trained fruit detection model",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--model", type=str, default=str(config.MODELS_DIR / "best.pt"),
+        help="Path to trained weights (default: models/best.pt)",
+    )
+    parser.add_argument(
+        "--data", type=str, default=str(config.DATA_YAML),
+        help="Path to data.yaml (default: data_v3.yaml)",
+    )
+    parser.add_argument(
+        "--split", type=str, default="test", choices=["val", "test"],
+        help="Dataset split to evaluate on (default: test)",
+    )
+    parser.add_argument(
+        "--imgsz", type=int, default=config.IMGSZ,
+        help=f"Input image size (default: {config.IMGSZ})",
+    )
+    parser.add_argument(
+        "--conf", type=float, default=0.25,
+        help="Confidence threshold (default: 0.25)",
+    )
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="Device: '0' for GPU, 'cpu'. Auto-detects if omitted.",
+    )
     return parser.parse_args()
 
 
-def main():
+def main() -> None:
     args = parse_args()
+    device = resolve_device(args.device)
 
     model_path = Path(args.model)
     if not model_path.exists():
         raise FileNotFoundError(
-            f"Model not found at {model_path}. "
-            "Run train.py first, or specify --model path."
+            f"Model weights not found at: {model_path}\n"
+            "Run train.py first, or pass --model <path>."
         )
 
     data_path = str(Path(args.data).resolve())
 
     print("=" * 60)
-    print("  FRUIT DETECTION MODEL - EVALUATION")
+    print("  FRUIT DETECTION MODEL — EVALUATION")
     print("=" * 60)
-    print(f"  Model   : {model_path}")
-    print(f"  Data    : {data_path}")
-    print(f"  Split   : {args.split}")
-    print(f"  Conf    : {args.conf}")
+    print(f"  Model  : {model_path}")
+    print(f"  Data   : {data_path}")
+    print(f"  Split  : {args.split}")
+    print(f"  Conf   : {args.conf}")
+    print(f"  Device : {device}")
     print("=" * 60)
 
-    # Load trained model
     model = YOLO(str(model_path))
 
-    # Run validation on the specified split
     results = model.val(
         data=data_path,
         split=args.split,
         imgsz=args.imgsz,
-        device=args.device,
+        device=device,
         conf=args.conf,
     )
 
-    # Print summary
+    # Summary
     print("\n" + "=" * 60)
-    print("  RESULTS SUMMARY")
+    print("  RESULTS")
     print("=" * 60)
-    print(f"  Precision     : {results.box.mp:.4f}")
-    print(f"  Recall        : {results.box.mr:.4f}")
-    print(f"  mAP@50        : {results.box.map50:.4f}")
-    print(f"  mAP@50-95     : {results.box.map:.4f}")
-    print("=" * 60)
+    print(f"  Precision  : {results.box.mp:.4f}")
+    print(f"  Recall     : {results.box.mr:.4f}")
+    print(f"  mAP@50     : {results.box.map50:.4f}")
+    print(f"  mAP@50-95  : {results.box.map:.4f}")
 
     # Per-class breakdown
-    names = results.names
     print("\n  Per-class mAP@50:")
-    print("  " + "-" * 35)
+    print("  " + "-" * 32)
     for i, ap50 in enumerate(results.box.ap50):
-        class_name = names.get(i, f"class_{i}")
-        print(f"    {class_name:<15s} : {ap50:.4f}")
-    print("  " + "-" * 35)
+        name = results.names.get(i, f"class_{i}")
+        bar = "█" * int(ap50 * 20)
+        print(f"    {name:<14s} {ap50:.4f}  {bar}")
+    print("  " + "-" * 32)
 
-    print("\n[OK] Evaluation complete!")
+    print("\n  [OK] Evaluation complete.")
     print("  Confusion matrix and plots saved by ultralytics to runs/")
 
 

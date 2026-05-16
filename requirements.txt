@@ -1,17 +1,22 @@
-# Fruit Detection Model - Dependencies
-# Install: pip install -r requirements.txt
+# Fruit Detection Model — Python Dependencies
+# ============================================================
+# IMPORTANT: Install PyTorch with CUDA BEFORE running pip install -r requirements.txt.
+#
+# For NVIDIA GPU (RTX 3060 / any CUDA 11.8–12.x):
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+#
+# For CPU-only (slow, not recommended for training):
+#   pip install torch torchvision
+# ============================================================
 
-# Core
-ultralytics>=8.1.0
+# Core — versions pinned to what is tested and working
+ultralytics==8.4.51
 opencv-python>=4.8.0
 numpy>=1.24.0
 Pillow>=10.0.0
 
-# Dataset preparation
-roboflow>=1.1.0
-
 # Export & inference
 onnxruntime>=1.16.0
 
-# Optional: TFLite export (uncomment if needed)
-# tensorflow>=2.13.0
+# Dataset preparation (only needed if re-running prepare_dataset_v3.py)
+# roboflow>=1.1.0

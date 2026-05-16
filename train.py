@@ -1,193 +1,219 @@
 """
-Fruit Detection Model - Training Script (v3)
-Fine-tunes YOLOv8 on the merged/balanced fruit dataset.
+train.py — Fruit Detection Model: Training entry point.
 
-Usage:
-    # Recommended: YOLOv8m + balanced dataset + webcam augmentations
-    python train.py --data data_v3.yaml --name fruit_v3 --epochs 120 --augment
+Fine-tunes a YOLOv8 model on the balanced fruit dataset (v3).
+All hyperparameters and paths are defined in config.py.
 
-    # On Colab / Kaggle (already has GPU, uses 4 workers)
-    python train.py --data /path/to/data_v3.yaml --name fruit_v3 --epochs 120 --augment --batch 16
+Usage
+-----
+Fresh training (recommended):
+    python train.py
 
-    # Resume a run
-    python train.py --name fruit_v3 --resume
+Resume a paused run (restores epoch, optimizer, and LR scheduler state):
+    python train.py --resume
+
+Override any default from config.py:
+    python train.py --epochs 150 --batch 16 --name my_run
 """
 
-import os
-import platform
 import argparse
+import platform
+import os
 import shutil
 from pathlib import Path
 
-import torch
 from ultralytics import YOLO
+import torch
 
-# --- PyTorch 2.6 Compatibility Workaround ---
-_original_load = torch.load
-def _patched_load(*args, **kwargs):
-    kwargs['weights_only'] = False
-    return _original_load(*args, **kwargs)
-torch.load = _patched_load
+import config
 
 
-def auto_device():
-    """Pick the best available device automatically."""
+# ---------------------------------------------------------------------------
+# Device / worker helpers
+# ---------------------------------------------------------------------------
+
+def resolve_device(override: str | None) -> str:
+    """
+    Return the best available compute device.
+
+    Priority: explicit override → CUDA GPU → CPU.
+    MPS (Apple Silicon) is intentionally omitted — not relevant here.
+    """
+    if override is not None:
+        return override
+
     if torch.cuda.is_available():
-        gpu = torch.cuda.get_device_name(0)
-        print(f"  GPU detected: {gpu}")
+        name = torch.cuda.get_device_name(0)
+        vram = torch.cuda.get_device_properties(0).total_memory / 1e9
+        print(f"  GPU : {name}  ({vram:.1f} GB VRAM)")
         return "0"
-    print("  No GPU detected — using CPU (training will be slow)")
+
+    print("  WARNING: No CUDA GPU detected — falling back to CPU. Training will be very slow.")
     return "cpu"
 
 
-def auto_workers():
-    """Use 4 workers on Linux/Colab, 0 on Windows to prevent Paging File crashes."""
-    if platform.system() == "Windows":
-        return 0
-    return min(4, os.cpu_count() or 2)
+def resolve_workers(override: int | None) -> int:
+    """
+    Return the number of DataLoader worker processes.
+
+    Windows spawns new Python processes per worker; with a small dataset
+    cache the overhead exceeds the benefit, so we use 0 (main process only).
+    Linux / Colab can safely use multiple workers.
+    """
+    if override is not None:
+        return override
+    return 0 if platform.system() == "Windows" else min(4, os.cpu_count() or 2)
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train YOLOv8 fruit detector")
-    parser.add_argument("--model", type=str, default="yolov8m.pt",
-                        help="Pretrained model to fine-tune (default: yolov8m.pt)")
-    parser.add_argument("--data", type=str, default="data_v3.yaml",
-                        help="Path to data.yaml (default: data_v3.yaml)")
-    parser.add_argument("--epochs", type=int, default=120,
-                        help="Number of training epochs (default: 120)")
-    parser.add_argument("--imgsz", type=int, default=640,
-                        help="Input image size (default: 640)")
-    parser.add_argument("--batch", type=int, default=-1,
-                        help="Batch size (-1=auto-detect max that fits in VRAM, default: -1)")
-    parser.add_argument("--device", type=str, default=None,
-                        help="Device override: '0' for GPU, 'cpu'. Auto-detects if not set.")
-    parser.add_argument("--workers", type=int, default=None,
-                        help="Dataloader workers. Auto: 4 on Linux, 2 on Windows.")
-    parser.add_argument("--patience", type=int, default=25,
-                        help="Early stopping patience (default: 25)")
-    parser.add_argument("--name", type=str, default="fruit_v3",
-                        help="Run name (default: fruit_v3)")
-    parser.add_argument("--resume", action="store_true",
-                        help="Resume training from last checkpoint")
-    parser.add_argument("--augment", action="store_true",
-                        help="Enable aggressive webcam-style augmentations (recommended for v3)")
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Train YOLOv8 fruit detector",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+
+    parser.add_argument(
+        "--model", type=str, default=config.BASE_MODEL,
+        help=f"Pretrained weights to fine-tune (default: {config.BASE_MODEL})",
+    )
+    parser.add_argument(
+        "--data", type=str, default=str(config.DATA_YAML),
+        help="Path to data.yaml (default: data_v3.yaml)",
+    )
+    parser.add_argument(
+        "--epochs", type=int, default=config.EPOCHS,
+        help=f"Training epochs (default: {config.EPOCHS})",
+    )
+    parser.add_argument(
+        "--imgsz", type=int, default=config.IMGSZ,
+        help=f"Input image size (default: {config.IMGSZ})",
+    )
+    parser.add_argument(
+        "--batch", type=int, default=config.BATCH,
+        help="Batch size. -1 = AutoBatch (fills VRAM safely). (default: -1)",
+    )
+    parser.add_argument(
+        "--patience", type=int, default=config.PATIENCE,
+        help=f"Early-stop patience in epochs (default: {config.PATIENCE})",
+    )
+    parser.add_argument(
+        "--name", type=str, default=config.RUN_NAME,
+        help=f"Run name under runs/ (default: {config.RUN_NAME})",
+    )
+    parser.add_argument(
+        "--device", type=str, default=None,
+        help="Device override: '0' for GPU, 'cpu'. Auto-detects if omitted.",
+    )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="DataLoader workers. Auto: 0 on Windows, 4 on Linux.",
+    )
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="Resume from the last checkpoint (restores full training state).",
+    )
+
     return parser.parse_args()
 
 
-def main():
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main() -> None:
     args = parse_args()
 
-    # Auto-detect device and workers if not set
-    device = args.device if args.device is not None else auto_device()
-    workers = args.workers if args.workers is not None else auto_workers()
+    device  = resolve_device(args.device)
+    workers = resolve_workers(args.workers)
 
-    # Resolve data.yaml to absolute path so YOLO finds it correctly
-    # (critical: on Colab the cwd may differ from where the yaml is)
+    # Resolve data.yaml to an absolute path.
+    # Critical on Colab / Kaggle where the working directory differs.
     data_path = str(Path(args.data).resolve())
     if not Path(data_path).exists():
         raise FileNotFoundError(
             f"data.yaml not found at: {data_path}\n"
-            f"Run balance_dataset.py first to generate it."
+            "Run prepare_dataset_v3.py and balance_dataset.py first."
         )
 
     print("=" * 60)
-    print("  FRUIT DETECTION MODEL - TRAINING")
+    print("  FRUIT DETECTION MODEL — TRAINING")
     print("=" * 60)
-    print(f"  Model       : {args.model}")
-    print(f"  Data        : {data_path}")
-    print(f"  Epochs      : {args.epochs}")
-    print(f"  Image size  : {args.imgsz}")
-    print(f"  Batch size  : {args.batch}")
-    print(f"  Device      : {device}")
-    print(f"  Workers     : {workers}")
-    print(f"  Patience    : {args.patience}")
-    print(f"  Run name    : {args.name}")
-    print(f"  Augment     : {'YES (webcam-optimised)' if args.augment else 'NO (default)'}")
+    print(f"  Model   : {args.model}")
+    print(f"  Data    : {data_path}")
+    print(f"  Epochs  : {args.epochs}")
+    print(f"  ImgSz   : {args.imgsz}")
+    print(f"  Batch   : {'auto' if args.batch == -1 else args.batch}")
+    print(f"  Device  : {device}")
+    print(f"  Workers : {workers}")
+    print(f"  Patience: {args.patience}")
+    print(f"  Run     : {args.name}")
+    print(f"  Resume  : {args.resume}")
     print("=" * 60)
 
-    # Load pretrained model
+    # ------------------------------------------------------------------
+    # Resume path — restores full training state (epoch, optimizer, LR).
+    # Note: when resume=True, ultralytics reads all hyperparams from the
+    # checkpoint and ignores kwargs passed to model.train().  We therefore
+    # call model.train(resume=True) with no other arguments.
+    # ------------------------------------------------------------------
     if args.resume:
-        # Resume from last checkpoint
-        last_ckpt = Path("runs") / args.name / "weights" / "last.pt"
+        last_ckpt = config.RUNS_DIR / args.name / "weights" / "last.pt"
         if not last_ckpt.exists():
-            raise FileNotFoundError(f"No checkpoint found at {last_ckpt}")
+            raise FileNotFoundError(
+                f"No checkpoint found at: {last_ckpt}\n"
+                "Start a fresh run without --resume, or check the run name."
+            )
+        print(f"\n  Resuming from: {last_ckpt}")
         model = YOLO(str(last_ckpt))
-        print(f"\nResuming from {last_ckpt}")
+        results = model.train(resume=True)
+
+    # ------------------------------------------------------------------
+    # Fresh training path
+    # ------------------------------------------------------------------
     else:
         model = YOLO(args.model)
-        print(f"\nLoaded pretrained weights: {args.model}")
+        print(f"\n  Loaded pretrained weights: {args.model}")
 
-    # -------------------------------------------------------
-    # Build training kwargs
-    # -------------------------------------------------------
-    train_kwargs = dict(
-        data=data_path,
-        epochs=args.epochs,
-        imgsz=args.imgsz,
-        batch=args.batch,
-        device=device,
-        workers=workers,
-        patience=args.patience,
-        cache="disk",     # Use fast local SSD cache instead of RAM (prevents 16GB RAM OOM)
-        project=str(Path(__file__).resolve().parent / "runs"),
-        name=args.name,
-        exist_ok=True,
-        # --- Quality improvements ---
-        label_smoothing=0.1,   # prevents overconfidence, improves generalization
-        cos_lr=True,           # cosine LR decay: better convergence than step decay
-        close_mosaic=10,       # disable mosaic for last 10 epochs for stable fine-tuning
-        val=True,              # always validate
-        save_period=10,        # checkpoint every 10 epochs
-    )
+        train_kwargs = {
+            "data":         data_path,
+            "epochs":       args.epochs,
+            "imgsz":        args.imgsz,
+            "batch":        args.batch,
+            "device":       device,
+            "workers":      workers,
+            "patience":     args.patience,
+            "project":      str(config.RUNS_DIR),
+            "name":         args.name,
+            "exist_ok":     False,   # Prevent silently overwriting a finished run.
+                                     # Use --resume to continue, or change --name.
+            "save_period":  config.SAVE_PERIOD,
+            **config.TRAIN_QUALITY_KWARGS,
+            **config.AUGMENT_KWARGS,
+        }
 
-    if args.augment:
-        # ---- Webcam robustness augmentations ----
-        # These simulate noisy real-world / webcam conditions:
-        #   hsv_*     : colour jitter handles dark/bright/yellow-lit rooms
-        #   degrees   : mild rotation (fruit held at angle)
-        #   translate : partial in-frame fruit
-        #   scale     : varying distance to fruit
-        #   blur_limit: webcam lens blur / motion blur
-        #   erasing   : partial occlusion (hand covering fruit)
-        #   mosaic    : trains on multi-object scenes (bowl of fruits)
-        #   mixup     : improves generalisation on minority classes
-        print("\n  Augmentation: webcam-optimised profile active")
-        train_kwargs.update(dict(
-            hsv_h=0.020,   # hue shift: handles colour casts from room lighting
-            hsv_s=0.80,    # saturation: over/under-saturated webcam feeds
-            hsv_v=0.50,    # brightness: dark rooms, backlit windows
-            degrees=12,    # rotation: tilted fruit / tilted camera
-            translate=0.12,
-            scale=0.60,    # zoom in/out: different distances from camera
-            shear=4.0,     # slight perspective distortion
-            perspective=0.0003,
-            flipud=0.0,    # fruit is never upside-down in real life
-            fliplr=0.5,
-            mosaic=1.0,    # mosaic always on
-            mixup=0.15,    # small mixup helps minority classes
-            erasing=0.40,  # 40% chance of random erase (simulates occlusion)
-            # blur_limit removed -- not a standard ultralytics kwarg (handled via augment pipeline)
-        ))
+        print("\n  Augmentation profile: webcam-optimised (see config.py)")
+        results = model.train(**train_kwargs)
 
-    # Train
-    project_dir = str(Path(__file__).resolve().parent / "runs")
-    results = model.train(**train_kwargs)
-
-    # Copy best weights to models/ for easy access
-    best_pt = Path(project_dir) / args.name / "weights" / "best.pt"
-    models_dir = Path(__file__).resolve().parent / "models"
-    models_dir.mkdir(exist_ok=True)
+    # ------------------------------------------------------------------
+    # Post-training: copy best weights to models/ for easy access
+    # ------------------------------------------------------------------
+    best_pt = config.RUNS_DIR / args.name / "weights" / "best.pt"
+    config.MODELS_DIR.mkdir(exist_ok=True)
 
     if best_pt.exists():
-        dest = models_dir / "best.pt"
+        dest = config.MODELS_DIR / "best.pt"
         shutil.copy2(best_pt, dest)
-        print(f"\n[OK] Best weights copied to {dest}")
+        print(f"\n  [OK] Best weights saved to: {dest}")
     else:
-        print(f"\n[!] best.pt not found at {best_pt}")
+        print(f"\n  [!] best.pt not found at {best_pt} — check training logs.")
 
-    print("\n[OK] Training complete!")
-    print(f"  Results saved to: {project_dir}/{args.name}/")
-    print(f"  Best weights: {models_dir / 'best.pt'}")
+    print(f"\n  [OK] Training complete.")
+    print(f"       Results : {config.RUNS_DIR / args.name}/")
+    print(f"       Weights : {config.MODELS_DIR / 'best.pt'}")
 
 
 if __name__ == "__main__":

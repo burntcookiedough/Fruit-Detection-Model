@@ -7,17 +7,6 @@ import cv2
 import numpy as np
 import urllib.request
 from ultralytics import YOLO
-import torch
-
-# --- PyTorch 2.6 Compatibility Workaround ---
-# PyTorch 2.6 defaults to weights_only=True, which breaks ultralytics weight loading.
-# Since we trust our own trained model, we temporarily patch torch.load to bypass this.
-_original_load = torch.load
-def _patched_load(*args, **kwargs):
-    kwargs['weights_only'] = False
-    return _original_load(*args, **kwargs)
-torch.load = _patched_load
-# --------------------------------------------
 
 # A list of fruit images from Wikimedia Commons to serve as random "real world" internet tests
 SAMPLE_URLS = [

@@ -50,11 +50,7 @@ dataset_v3_colab.zip
 # Model Weights
 # ============================================================
 # Base pretrained weights downloaded from Ultralytics (not our work)
-yolov8n.pt
-yolov8s.pt
-yolov8m.pt
-yolov8l.pt
-yolov8x.pt
+/*.pt
 
 # TensorRT / ONNX exports (large runtime artifacts)
 *.engine
