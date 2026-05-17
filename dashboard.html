@@ -245,7 +245,7 @@
                 <div class="glass-panel rounded-2xl p-5 fade-in md:col-span-2 flex items-center justify-around border-white/5" style="animation-delay: 0.8s;">
                     <div class="text-center">
                         <div class="text-xs text-nexus-muted uppercase tracking-widest font-semibold mb-2">Batch Size</div>
-                        <div class="text-xl font-mono font-bold text-white">16</div>
+                        <div class="text-xl font-mono font-bold text-white">8</div>
                     </div>
                     <div class="h-8 w-[1px] bg-white/10"></div>
                     <div class="text-center">
@@ -393,7 +393,7 @@
 
         // --- Data Fetching ---
         function fetchAndUpdateData() {
-            fetch(`runs/fruit_v3/results.csv?t=${new Date().getTime()}`)
+            fetch(`runs/fruit_v3b/results.csv?t=${new Date().getTime()}`)
                 .then(response => {
                     if (!response.ok) throw new Error("CSV not found");
                     return response.text();
@@ -529,12 +529,19 @@
                 const maxHrs = Math.floor(maxSecondsLeft / 3600);
                 const maxMins = Math.floor((maxSecondsLeft % 3600) / 60);
                 
+                let avgEpStr = "Calculating...";
+                if (typeof avgTimePerEpoch !== 'undefined' && avgTimePerEpoch > 0) {
+                    const epMins = Math.floor(avgTimePerEpoch / 60);
+                    const epSecs = Math.floor(avgTimePerEpoch % 60);
+                    avgEpStr = `${epMins}m ${epSecs}s / epoch`;
+                }
+                
                 if (currentEpochNum < 60) {
                     const realHrs = Math.floor(realSecondsLeft / 3600);
                     const realMins = Math.floor((realSecondsLeft % 3600) / 60);
-                    document.getElementById('etaTimer').innerHTML = `~${realHrs}h ${realMins}m <span class="text-nexus-muted text-xs font-normal">/ Max ${maxHrs}h ${maxMins}m</span>`;
+                    document.getElementById('etaTimer').innerHTML = `~${realHrs}h ${realMins}m <span class="text-nexus-muted text-xs font-normal">/ Max ${maxHrs}h ${maxMins}m | ${avgEpStr}</span>`;
                 } else {
-                    document.getElementById('etaTimer').innerText = `Max ${maxHrs}h ${maxMins}m`;
+                    document.getElementById('etaTimer').innerHTML = `Max ${maxHrs}h ${maxMins}m <span class="text-nexus-muted text-xs font-normal">| ${avgEpStr}</span>`;
                 }
             }
 
@@ -624,7 +631,7 @@
 
         let freezeCounter = 0;
         function fetchTelemetry() {
-            fetch(`runs/fruit_v3/telemetry.json?t=${new Date().getTime()}`)
+            fetch(`runs/fruit_v3b/telemetry.json?t=${new Date().getTime()}`)
                 .then(res => res.json())
                 .then(data => {
                     document.getElementById('kpiGpuUtil').innerText = `${data.gpu_util_percent}%`;

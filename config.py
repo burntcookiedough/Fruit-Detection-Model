@@ -29,10 +29,10 @@ BASE_MODEL = "yolov8s.pt"
 # ---------------------------------------------------------------------------
 EPOCHS       = 120
 IMGSZ        = 640
-BATCH        = 16        # 16 uses ~2.5GB VRAM, much faster than AutoBatch's conservative estimate
+BATCH        = 8         # 8 keeps VRAM under 4GB — prevents spillover on 6GB RTX 3060
 PATIENCE     = 25        # early-stop if mAP50 doesn't improve for 25 epochs
 SAVE_PERIOD  = 10        # save a checkpoint every N epochs
-RUN_NAME     = "fruit_v3"
+RUN_NAME     = "fruit_v3b"
 
 # ---------------------------------------------------------------------------
 # Augmentation profile  (webcam-optimised)

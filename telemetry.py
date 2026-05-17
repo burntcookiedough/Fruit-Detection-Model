@@ -6,8 +6,8 @@ import subprocess
 from pathlib import Path
 
 # Config
-OUTPUT_FILE = Path("runs/fruit_v3/telemetry.json")
-TEMP_FILE = Path("runs/fruit_v3/telemetry.tmp.json")
+OUTPUT_FILE = Path("runs/fruit_v3b/telemetry.json")
+TEMP_FILE = Path("runs/fruit_v3b/telemetry.tmp.json")
 UPDATE_INTERVAL = 2.0
 
 def get_gpu_metrics():

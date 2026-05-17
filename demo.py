@@ -115,14 +115,21 @@ def run_webcam(model, camera_id=0, conf=0.15, imgsz=640, enhance=True):
         imgsz       : Inference image size.  320 is faster; 640 is more accurate.
         enhance     : Apply CLAHE preprocessing (helps a lot in dark rooms).
     """
+    # Warm up the model with a dummy frame first so the webcam buffer doesn't timeout
+    print("[INFO] Warming up model...")
+    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
+    model(dummy, imgsz=imgsz, conf=conf, verbose=False)
+
+    # Use default backend (MSMF on Windows). We removed DSHOW because it disables 
+    # auto-exposure on some webcams, resulting in dark, red, 2-FPS video.
     cap = cv2.VideoCapture(camera_id)
+    
+    # Force a standard HD resolution so the camera doesn't use a weird fallback mode
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     if not cap.isOpened():
         print(f"[ERROR] Cannot open camera with ID {camera_id}. Make sure it is connected and not used by another app.")
         return
-
-    # Warm up the model with a dummy frame so first real frame is fast
-    dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
-    model(dummy, imgsz=imgsz, conf=conf, verbose=False)
 
     print(f"\n[INFO] Webcam started on camera {camera_id}.")
     print(f"[INFO] Confidence threshold : {conf}  (lower = more detections)")
@@ -130,13 +137,19 @@ def run_webcam(model, camera_id=0, conf=0.15, imgsz=640, enhance=True):
     print(">>>> PRESS 'q' in the video window to quit <<<<")
 
     fps_smooth = 0.0
+    fail_count = 0
 
     while True:
         t0 = time.time()
         ret, frame = cap.read()
         if not ret:
-            print("[ERROR] Frame capture failed")
-            break
+            fail_count += 1
+            if fail_count > 10:
+                print("[ERROR] Frame capture failed repeatedly. Exiting.")
+                break
+            time.sleep(0.1)
+            continue
+        fail_count = 0  # reset on success
 
         # Apply CLAHE to boost contrast in poor lighting
         inference_frame = preprocess_webcam_frame(frame) if enhance else frame
