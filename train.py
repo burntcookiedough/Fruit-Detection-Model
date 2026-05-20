@@ -81,8 +81,8 @@ def parse_args() -> argparse.Namespace:
         help=f"Pretrained weights to fine-tune (default: {config.BASE_MODEL})",
     )
     parser.add_argument(
-        "--data", type=str, default=str(config.DATA_YAML),
-        help="Path to data.yaml (default: data_v3.yaml)",
+        "--data", type=str, default=None,
+        help="Path to data.yaml. Defaults to data_v3_clean.yaml when --clean, else data_v3.yaml.",
     )
     parser.add_argument(
         "--epochs", type=int, default=config.EPOCHS,
@@ -116,6 +116,15 @@ def parse_args() -> argparse.Namespace:
         "--resume", action="store_true",
         help="Resume from the last checkpoint (restores full training state).",
     )
+    parser.add_argument(
+        "--clean", action="store_true",
+        help=(
+            "Use clean dataset + reduced augmentation profile for the post-fix "
+            "debugging retrain. Switches data to data_v3_clean.yaml and augmentations "
+            "to CLEAN_AUGMENT_KWARGS (lower mosaic, no mixup, gentler scale). "
+            "Run filter_dataset.py first."
+        ),
+    )
 
     return parser.parse_args()
 
@@ -130,9 +139,23 @@ def main() -> None:
     device  = resolve_device(args.device)
     workers = resolve_workers(args.workers)
 
+    # ------------------------------------------------------------------
+    # Select augmentation profile and data yaml
+    # ------------------------------------------------------------------
+    if args.clean:
+        aug_profile  = config.CLEAN_AUGMENT_KWARGS
+        default_data = str(config.DATA_YAML_CLEAN)
+        profile_name = "clean (post-fix debugging)"
+    else:
+        aug_profile  = config.AUGMENT_KWARGS
+        default_data = str(config.DATA_YAML)
+        profile_name = "full webcam-optimised"
+
+    data_yaml = args.data if args.data is not None else default_data
+
     # Resolve data.yaml to an absolute path.
     # Critical on Colab / Kaggle where the working directory differs.
-    data_path = str(Path(args.data).resolve())
+    data_path = str(Path(data_yaml).resolve())
     if not Path(data_path).exists():
         raise FileNotFoundError(
             f"data.yaml not found at: {data_path}\n"
@@ -152,6 +175,7 @@ def main() -> None:
     print(f"  Patience: {args.patience}")
     print(f"  Run     : {args.name}")
     print(f"  Resume  : {args.resume}")
+    print(f"  Profile : {profile_name}")
     print("=" * 60)
 
     # ------------------------------------------------------------------
@@ -169,7 +193,21 @@ def main() -> None:
             )
         print(f"\n  Resuming from: {last_ckpt}")
         model = YOLO(str(last_ckpt))
+
+        # FIX: Bypass Ultralytics YOLOv8 disk space check bug during resume
+        # It doesn't account for existing cache files, so we artificially report 1TB free space.
+        import shutil
+        from collections import namedtuple
+        original_disk_usage = shutil.disk_usage
+        def mock_disk_usage(path):
+            usage = original_disk_usage(path)
+            return namedtuple('usage', 'total used free')(usage.total, usage.used, 1000 * 1024**3)
+        shutil.disk_usage = mock_disk_usage
+
         results = model.train(resume=True)
+        
+        # Restore original function just in case
+        shutil.disk_usage = original_disk_usage
 
     # ------------------------------------------------------------------
     # Fresh training path
@@ -192,10 +230,10 @@ def main() -> None:
                                      # Use --resume to continue, or change --name.
             "save_period":  config.SAVE_PERIOD,
             **config.TRAIN_QUALITY_KWARGS,
-            **config.AUGMENT_KWARGS,
+            **aug_profile,           # AUGMENT_KWARGS or CLEAN_AUGMENT_KWARGS
         }
 
-        print("\n  Augmentation profile: webcam-optimised (see config.py)")
+        print(f"\n  Augmentation profile: {profile_name} (see config.py)")
         results = model.train(**train_kwargs)
 
     # ------------------------------------------------------------------

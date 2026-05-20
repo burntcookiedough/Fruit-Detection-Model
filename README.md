@@ -1,75 +1,67 @@
 # 🍎 Fruit Detection Model
 
-A lightweight, real-world fruit detection system built with **YOLOv8n** (Nano) and trained on a merged dataset of 8,630 real-world images. Designed for fast inference and embedded hardware deployment.
+A real-world fruit detection system built with **YOLOv8s** and trained on a
+quality-filtered, leakage-free dataset of **26,000+ images** across 8 fruit classes.
+Designed for iterative improvement toward embedded hardware deployment.
 
 ---
 
-## 📦 Classes Detected
+## 📊 Model Performance (V4 — Current Champion)
 
-| # | Fruit | mAP@50 |
-|---|-------|--------|
-| 0 | 🍎 Apple | 68.6% |
-| 1 | 🍌 Banana | 62.2% |
-| 2 | 🍊 Orange | 71.4% |
-| 3 | 🥭 Mango | 82.1% |
-| 4 | 🍍 Pineapple | 92.1% |
-| 5 | 🍉 Watermelon | 82.1% |
-| 6 | 🍇 Grapes | 63.7% |
-| 7 | 🍎 Pomegranate | 85.9% |
+**Model**: `models/best.pt` — YOLOv8s, 11M params, 21.5 MB (inference-ready)
+**Training**: 120 epochs on RTX 3060 6 GB, `dataset_v4_balanced`
 
----
+| Split | Images | mAP@50 | mAP@50-95 | Precision | Recall |
+|---|---:|---:|---:|---:|---:|
+| **Validation** | 3,815 | **75.4%** | 57.8% | 80.5% | 68.0% |
+| **Test** (holdout) | 4,728 | **66.2%** | 51.6% | 80.4% | 67.6% |
+| **Webcam stress** | 155 | **41.7%** | 28.7% | 70.8% | 46.5% |
 
-## 🏆 Benchmark Results (Held-out Test Set — 863 real-world images)
+### Per-Class Test Results
 
-| Metric | Score |
-|--------|-------|
-| **mAP@50** | **76.0%** |
-| **mAP@50-95** | **63.4%** |
-| **Precision** | **85.1%** |
-| **Recall** | **70.6%** |
-| **Inference Speed** | **4.7ms/image (GPU)** |
+| Class | mAP@50 | Recall | Webcam mAP@50 | Status |
+|---|---:|---:|---:|---|
+| 🥭 Mango | 97.1% | 96.9% | 79.3% | 🟢 Excellent |
+| 🍎 Pomegranate | 91.6% | 91.8% | 61.1% | 🟢 Good |
+| 🍊 Orange | 64.4% | 66.1% | 10.7% | 🔴 Webcam critical |
+| 🍇 Grapes | 54.5% | 57.5% | 39.5% | 🟠 Moderate |
+| 🍌 Banana | 56.8% | 58.5% | 30.2% | 🟠 Moderate |
+| 🍍 Pineapple | 53.4% | 54.9% | 40.2% | 🟠 Moderate |
+| 🍉 Watermelon | 51.5% | 52.2% | 59.0% | 🟡 Decent |
+| 🍎 Apple | 60.3% | 63.1% | 13.3% | 🔴 Webcam critical |
 
-> Model: YOLOv8n — 6MB, 212 FPS on GPU  
-> Hardware: RTX 3060 6GB  
-> Training: 80 epochs, ~112 minutes  
+> Apple and orange collapse under webcam conditions because the model learned
+> colour-only shortcuts. V5 training addresses this with synthetic webcam-degraded
+> training images.
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Install dependencies
-
 ```bash
 python -m venv venv
 venv\Scripts\activate          # Windows
-# source venv/bin/activate    # Linux/Mac
 pip install -r requirements.txt
 ```
 
-> **Note:** The base pretrained `yolov8n.pt` is not included. It is auto-downloaded by ultralytics on first run.
-
-### 2. Run inference on a random internet image
-
+### Run inference (internet image)
 ```bash
 python demo.py
 ```
 
-### 3. Run inference on a specific image URL
-
-```bash
-python demo.py --url "https://example.com/fruit.jpg"
-```
-
-### 4. Run live webcam inference
-
+### Run webcam inference
 ```bash
 python demo.py --mode webcam
 ```
 
-### 5. Evaluate on the test set
-
+### Evaluate on test set
 ```bash
-python evaluate.py --model models/best.pt --data data_v2.yaml
+python evaluate.py --model models/best.pt --data data_v4_balanced.yaml --split test
+```
+
+### Evaluate on webcam stress set
+```bash
+python evaluate.py --model models/best.pt --data synthetic_webcam_holdout/data_synthetic_holdout.yaml
 ```
 
 ---
@@ -78,83 +70,161 @@ python evaluate.py --model models/best.pt --data data_v2.yaml
 
 ```
 Fruit Detection Model/
-├── demo.py                  # Live demo: internet images & webcam
-├── train.py                 # Training script (YOLOv8n fine-tuning)
-├── evaluate.py              # Evaluate model on test split
-├── prepare_dataset.py       # Dataset prep v1 (original synthetic)
-├── prepare_dataset_v2.py    # Dataset prep v2 (real-world Kaggle + LVIS)
-├── data.yaml                # Dataset config v1
-├── data_v2.yaml             # Dataset config v2 (used for training)
-├── requirements.txt         # Python dependencies
+│
+├── train.py                    # Training entry point
+├── evaluate.py                 # Evaluation (test/val/webcam splits)
+├── demo.py                     # Live inference: webcam or internet image
+├── config.py                   # All hyperparameters — single source of truth
+├── telemetry.py                # Training metrics logger
+├── dashboard.html              # Live training dashboard
+│
+├── pipeline/                   # V4 dataset build pipeline (numbered, ordered)
+│   ├── 01_source_audit.py          # Audit raw source datasets
+│   ├── 02_build_raw.py             # Merge raw sources into one dataset
+│   ├── 03_prepare_quality.py       # Quality filter (resolution, box size)
+│   ├── 04_check_leakage.py         # Detect train/val/test leakage
+│   ├── 05_clean_leakage.py         # Remove duplicate images across splits
+│   ├── 06_filter_tiny_boxes.py     # Drop boxes below minimum size
+│   ├── 07_drop_empty_pairs.py      # Remove images with no valid labels
+│   ├── 08_balance_train.py         # Balance training set per-class
+│   └── 09_generate_webcam_train.py # Generate webcam-degraded training images (V5)
+│
+├── tools/                      # Utility scripts (recurring use)
+│   ├── generate_synthetic_webcam_holdout.py  # Regenerate stress-test set
+│   ├── predict_samples.py
+│   └── predict_stress_samples.py
+│
+├── export/                     # Model export
+│   ├── export_onnx.py              # ONNX (Raspberry Pi, Jetson, laptop)
+│   └── export_tflite.py            # TFLite (Android, Coral)
+│
+├── inference/                  # Standalone inference scripts
+│   ├── webcam.py
+│   └── image.py
+│
+├── archive/                    # V3-era scripts (superseded, kept for reference)
+│
 ├── models/
-│   ├── best.pt              # Current best model (v2, real-world trained)
-│   ├── best_v1.pt           # Old model (v1, synthetic trained)
-│   └── best.onnx            # ONNX export for edge deployment
-├── export/
-│   ├── export_onnx.py       # Export to ONNX format
-│   └── export_tflite.py     # Export to TFLite format
-└── inference/
-    ├── image.py             # Batch inference on local images
-    └── webcam.py            # Standalone webcam inference
+│   └── best.pt                 # Current champion weights (YOLOv8s, V4)
+│
+├── dataset_v4_balanced/        # Training dataset (42 GB, 26K images, 8 classes)
+├── raw_datasets/               # Original downloaded sources (14 GB, irreplaceable)
+├── synthetic_webcam_holdout/   # 155-image webcam stress-test set
+│
+├── data_v4_balanced.yaml       # V4 dataset config (clean)
+├── data_v5_webcam.yaml         # V5 dataset config (clean + webcam-degraded)
+│
+└── runs/
+    ├── fruit_v4_quality/       # V4 champion run (best mAP50: 75.4% @ epoch 93)
+    └── fruit_v4_s_local/       # Phase A baseline (frozen for comparison)
 ```
 
 ---
 
-## 🔁 Retrain from Scratch
+## 🔄 Improvement Cycle
 
-### 1. Download datasets
+This project uses an iterative improvement loop until the architecture ceiling is reached:
 
+```
+Train → Evaluate (test + webcam) → Identify weak classes → Improve data → Retrain
+```
+
+### Current Cycle: V4 → V5
+**Target**: Fix apple and orange webcam collapse (13%, 11% → 50%+)
+
+**Approach**: Add `dataset_v4_webcam_train/` to training — synthetic webcam-degraded
+copies of all V4 training images (JPEG compression, colour casts, blur, low-res,
+vignette). This directly trains the model on bad-camera conditions.
+
+**Build V5 dataset**:
+```bash
+python pipeline/09_generate_webcam_train.py
+```
+
+**Train V5**:
+```bash
+python train.py --name fruit_v5_quality
+```
+
+**Evaluate V5**:
+```bash
+python evaluate.py --model runs/fruit_v5_quality/weights/best.pt --data data_v5_webcam.yaml --split test
+python evaluate.py --model runs/fruit_v5_quality/weights/best.pt --data synthetic_webcam_holdout/data_synthetic_holdout.yaml
+```
+
+### Acceptance Criteria for "Good Enough"
+
+| Metric | V4 (current) | V5 Target |
+|---|---:|---:|
+| Test mAP@50 | 66.2% | ≥ 68% |
+| Webcam mAP@50 | 41.7% | ≥ 58% |
+| Apple webcam mAP@50 | 13.3% | ≥ 45% |
+| Orange webcam mAP@50 | 10.7% | ≥ 45% |
+
+---
+
+## 🔧 Retrain from Scratch
+
+### 1. Download source datasets
 ```bash
 kaggle datasets download -d henningheyen/lvis-fruits-and-vegetables-dataset -p raw_datasets/lvis_fruits
 kaggle datasets download -d lakshaytyagi01/fruit-detection -p raw_datasets/fruit_detection_kaggle
+# + other sources documented in pipeline/01_source_audit.py
 ```
 
-### 2. Prepare the merged dataset
-
+### 2. Run build pipeline (in order)
 ```bash
-python prepare_dataset_v2.py
+python pipeline/02_build_raw.py
+python pipeline/03_prepare_quality.py
+python pipeline/04_check_leakage.py
+python pipeline/05_clean_leakage.py
+python pipeline/06_filter_tiny_boxes.py
+python pipeline/07_drop_empty_pairs.py
+python pipeline/08_balance_train.py
+python pipeline/09_generate_webcam_train.py   # V5 only
 ```
 
 ### 3. Train
-
 ```bash
-python train.py --epochs 80 --batch 16
+python train.py --name fruit_v5_quality
 ```
 
 ---
 
-## 📤 Export for Deployment
+## 📦 Export for Deployment
 
 ```bash
-# ONNX (hardware-agnostic, Raspberry Pi, Jetson, etc.)
-python export/export_onnx.py
+# ONNX — hardware-agnostic (Raspberry Pi 4, Jetson Nano, laptop CPU)
+python export/export_onnx.py --model models/best.pt
 
-# TFLite (Android, microcontrollers)
-python export/export_tflite.py
+# TFLite — Android, Coral TPU
+python export/export_tflite.py --model models/best.pt
 ```
+
+**Target hardware guide**:
+| Hardware | Format | Expected FPS |
+|---|---|---|
+| RTX 3060 (GPU) | PyTorch | 212 FPS |
+| Laptop CPU (no GPU) | ONNX Runtime | ~20–40 FPS |
+| Raspberry Pi 4 | ONNX Runtime | ~3–6 FPS |
+| Jetson Nano | TensorRT | ~25–35 FPS |
+| Android phone | TFLite | ~15–25 FPS |
 
 ---
 
-## 🛠️ CLI Reference
+## ⚙️ CLI Reference
 
 | Script | Key Args |
-|--------|----------|
-| `demo.py` | `--mode [internet\|webcam]`, `--url`, `--conf`, `--imgsz`, `--model` |
-| `train.py` | `--epochs`, `--batch`, `--data`, `--device`, `--name` |
-| `evaluate.py` | `--model`, `--data`, `--split` |
+|---|---|
+| `train.py` | `--name`, `--epochs`, `--batch`, `--data`, `--resume` |
+| `evaluate.py` | `--model`, `--data`, `--split [test\|val]` |
+| `demo.py` | `--mode [internet\|webcam]`, `--url`, `--conf`, `--model` |
+| `pipeline/09_generate_webcam_train.py` | `--fraction`, `--seed`, `--no-dual-pass` |
 
 ---
 
 ## 📋 Requirements
 
 - Python 3.9+
-- CUDA-capable GPU (recommended) or CPU
+- CUDA GPU recommended (RTX 3060 6 GB used for development)
 - See `requirements.txt` for full dependency list
-
----
-
-## 📝 Notes
-
-- The model was fine-tuned from `yolov8n.pt` (COCO pretrained) using transfer learning.
-- Training data: **8,630 images** merged from LVIS, Kaggle Fruit Detection, and Roboflow datasets.
-- The v1 model (`best_v1.pt`) was trained on ~2,200 synthetic/photoshopped images and is kept for comparison only.

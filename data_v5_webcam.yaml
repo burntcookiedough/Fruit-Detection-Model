@@ -1,0 +1,36 @@
+# Fruit Detection Dataset V5 — Webcam-Augmented Training
+#
+# Training uses TWO sources:
+#   1. dataset_v4_balanced/train/ — original clean balanced training images
+#   2. dataset_v4_webcam_train/train/ — synthetic webcam-degraded copies of
+#      ~60% of training images (JPEG artifacts, color casts, blur, low-res)
+#
+# Val and test stay CLEAN — natural distribution, never augmented.
+# This ensures evaluation metrics are comparable to V4.
+#
+# Generate the webcam training set first:
+#   python pipeline/09_generate_webcam_train.py
+#
+# Total training images (approx):
+#   17,876 (clean) + ~10,700 (webcam) = ~28,576
+
+path: F:\Fruit Detection Model
+
+train:
+  - dataset_v4_balanced/train/images
+  - dataset_v4_webcam_train/train/images
+
+val:  dataset_v4_balanced/valid/images
+test: dataset_v4_balanced/test/images
+
+nc: 8
+
+names:
+  0: apple
+  1: banana
+  2: orange
+  3: mango
+  4: pineapple
+  5: watermelon
+  6: grapes
+  7: pomegranate

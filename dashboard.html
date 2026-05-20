@@ -102,10 +102,24 @@
             </div>
         </div>
         
-        <!-- Tab Navigation (Segmented Control style) -->
-        <div class="flex items-center bg-black/50 rounded-full p-1.5 border border-white/5">
-            <button class="nav-btn active px-6 py-2 rounded-full text-base font-medium tracking-wide" onclick="switchTab('overview')">Telemetry</button>
-            <button class="nav-btn px-6 py-2 rounded-full text-base font-medium tracking-wide" onclick="switchTab('raw')">Data Stream</button>
+        <!-- Tab Navigation (Segmented Control style) & Run Selector -->
+        <div class="flex items-center gap-4">
+            <div class="flex items-center bg-black/50 rounded-full p-1.5 border border-white/5">
+                <button class="nav-btn active px-6 py-2 rounded-full text-base font-medium tracking-wide" onclick="switchTab('overview')">Telemetry</button>
+                <button class="nav-btn px-6 py-2 rounded-full text-base font-medium tracking-wide" onclick="switchTab('status')">Run Status</button>
+                <button class="nav-btn px-6 py-2 rounded-full text-base font-medium tracking-wide" onclick="switchTab('raw')">Data Stream</button>
+            </div>
+            
+            <div class="flex items-center gap-2 bg-black/50 border border-white/5 rounded-full px-4 py-2">
+                <span class="text-xs text-nexus-muted font-mono uppercase tracking-wider hidden lg:inline">Run:</span>
+                <select id="runSelector" onchange="changeRun(this.value)" class="bg-transparent text-white font-medium text-sm focus:outline-none cursor-pointer">
+                    <option value="fruit_v4_quality" class="bg-nexus-bg text-white">fruit_v4_quality (V4 Training)</option>
+                    <option value="fruit_v4_s_local" class="bg-nexus-bg text-white">fruit_v4_s_local (Phase A Baseline)</option>
+                    <option value="fruit_v3_clean" class="bg-nexus-bg text-white">fruit_v3_clean (Cleaned)</option>
+                    <option value="fruit_v3b" class="bg-nexus-bg text-white">fruit_v3b (Baseline)</option>
+                    <option value="fruit_v3" class="bg-nexus-bg text-white">fruit_v3 (Initial)</option>
+                </select>
+            </div>
         </div>
 
         <!-- Status & ETA Area -->
@@ -149,7 +163,7 @@
                     <div class="text-base text-nexus-muted font-medium">Training Phase</div>
                     <div class="mt-4 flex items-baseline gap-1">
                         <span class="text-6xl font-bold text-white tracking-tighter" id="kpiEpoch">--</span>
-                        <span class="text-xl text-nexus-muted font-medium">/ 120</span>
+                        <span class="text-xl text-nexus-muted font-medium" id="kpiEpochTotal">/ 120</span>
                     </div>
                     <div class="mt-4 flex items-center gap-2">
                         <div class="h-1.5 flex-1 bg-white/10 rounded-full overflow-hidden">
@@ -291,7 +305,145 @@
             </section>
         </div>
 
-        <!-- ==================== TAB 2: RAW METRICS ==================== -->
+        <!-- ==================== TAB 2: RUN STATUS ==================== -->
+        <div id="status" class="tab-content space-y-6">
+            <section class="grid grid-cols-1 xl:grid-cols-3 gap-6">
+                <div class="glass-panel rounded-3xl p-7 xl:col-span-2">
+                    <div class="flex flex-wrap items-start justify-between gap-4 mb-8">
+                        <div>
+                            <p class="text-xs text-nexus-muted uppercase tracking-[0.25em] font-mono mb-2">Live Run Control</p>
+                            <h2 class="text-3xl font-bold text-white tracking-tight" id="statusRunName">--</h2>
+                        </div>
+                        <div class="px-4 py-2 rounded-full bg-nexus-emerald/10 border border-nexus-emerald/20 text-nexus-emerald font-mono text-sm" id="statusLiveState">Live</div>
+                    </div>
+
+                    <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div class="bg-white/[0.03] rounded-2xl p-5 border border-white/5">
+                            <div class="text-xs text-nexus-muted uppercase tracking-widest font-semibold mb-2">Epoch</div>
+                            <div class="text-4xl font-bold text-white" id="statusEpoch">--</div>
+                            <div class="text-xs text-white/45 font-mono mt-2" id="statusProgressText">-- complete</div>
+                        </div>
+                        <div class="bg-white/[0.03] rounded-2xl p-5 border border-white/5">
+                            <div class="text-xs text-nexus-muted uppercase tracking-widest font-semibold mb-2">ETA</div>
+                            <div class="text-4xl font-bold text-nexus-cyan" id="statusEta">--</div>
+                            <div class="text-xs text-white/45 font-mono mt-2" id="statusFinishTime">--</div>
+                        </div>
+                        <div class="bg-white/[0.03] rounded-2xl p-5 border border-white/5">
+                            <div class="text-xs text-nexus-muted uppercase tracking-widest font-semibold mb-2">Epoch Speed</div>
+                            <div class="text-4xl font-bold text-nexus-violet" id="statusEpochSpeed">--</div>
+                            <div class="text-xs text-white/45 font-mono mt-2" id="statusTimeSource">median recent epochs</div>
+                        </div>
+                        <div class="bg-white/[0.03] rounded-2xl p-5 border border-white/5">
+                            <div class="text-xs text-nexus-muted uppercase tracking-widest font-semibold mb-2">Best mAP50</div>
+                            <div class="text-4xl font-bold text-nexus-amber" id="statusBestMap">--</div>
+                            <div class="text-xs text-white/45 font-mono mt-2" id="statusBestEpoch">--</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-3xl p-7">
+                    <p class="text-xs text-nexus-muted uppercase tracking-[0.25em] font-mono mb-2">Speed Levers Applied</p>
+                    <h2 class="text-2xl font-bold text-white tracking-tight mb-6">Laptop Tuning</h2>
+                    <div class="space-y-3 text-sm">
+                        <div class="flex items-center justify-between bg-nexus-emerald/5 rounded-xl px-4 py-3 border border-nexus-emerald/20">
+                            <span class="text-nexus-muted">Power plan</span>
+                            <span class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-nexus-emerald/15 border border-nexus-emerald/30 text-nexus-emerald text-[10px] font-bold uppercase tracking-widest">✓ Active</span>
+                                <span class="text-nexus-emerald font-mono" id="statusPowerPlan">High performance</span>
+                            </span>
+                        </div>
+                        <div class="flex items-center justify-between bg-nexus-emerald/5 rounded-xl px-4 py-3 border border-nexus-emerald/20">
+                            <span class="text-nexus-muted">Trainer priority</span>
+                            <span class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-nexus-emerald/15 border border-nexus-emerald/30 text-nexus-emerald text-[10px] font-bold uppercase tracking-widest">✓ Active</span>
+                                <span class="text-nexus-emerald font-mono" id="statusPriority">High</span>
+                            </span>
+                        </div>
+                        <div class="flex items-center justify-between bg-nexus-amber/5 rounded-xl px-4 py-3 border border-nexus-amber/20">
+                            <span class="text-nexus-muted">Worker priority</span>
+                            <span class="flex items-center gap-2">
+                                <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-nexus-amber/15 border border-nexus-amber/30 text-nexus-amber text-[10px] font-bold uppercase tracking-widest">✓ Active</span>
+                                <span class="text-nexus-amber font-mono" id="statusWorkerPriority">AboveNormal</span>
+                            </span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">GPU Temp (Live)</span>
+                            <span class="font-mono text-2xl font-bold" id="statusThermal">--°C</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div class="glass-panel rounded-3xl p-7">
+                    <p class="text-xs text-nexus-muted uppercase tracking-[0.25em] font-mono mb-2">Early Stop State</p>
+                    <div class="space-y-3 mt-6 text-sm">
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">No-improve epochs</span>
+                            <span class="font-mono text-nexus-amber" id="statusNoImprove">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Earliest stop epoch</span>
+                            <span class="font-mono text-white" id="statusStopEpoch">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Remaining to max</span>
+                            <span class="font-mono text-nexus-cyan" id="statusRemainingEpochs">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Current vs best</span>
+                            <span class="font-mono" id="statusBestGap">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-3xl p-7">
+                    <p class="text-xs text-nexus-muted uppercase tracking-[0.25em] font-mono mb-2">Timing</p>
+                    <div class="space-y-3 mt-6 text-sm">
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Elapsed</span>
+                            <span class="font-mono text-white" id="statusElapsed">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Last epoch</span>
+                            <span class="font-mono text-nexus-violet" id="statusLastEpochTime">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Fastest epoch</span>
+                            <span class="font-mono text-nexus-emerald" id="statusFastestEpoch">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Slowest recent</span>
+                            <span class="font-mono text-nexus-rose" id="statusSlowestRecent">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-panel rounded-3xl p-7">
+                    <p class="text-xs text-nexus-muted uppercase tracking-[0.25em] font-mono mb-2">Training Signals</p>
+                    <div class="space-y-3 mt-6 text-sm">
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Learning rate</span>
+                            <span class="font-mono text-nexus-cyan" id="statusLr">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">LR remaining</span>
+                            <span class="font-mono text-white" id="statusLrRemaining">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Val/train box gap</span>
+                            <span class="font-mono" id="statusLossGap">--</span>
+                        </div>
+                        <div class="flex items-center justify-between bg-white/[0.03] rounded-xl px-4 py-3 border border-white/5">
+                            <span class="text-nexus-muted">Overfit risk</span>
+                            <span class="font-mono" id="statusOverfitRisk">--</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- ==================== TAB 3: RAW METRICS ==================== -->
         <div id="raw" class="tab-content">
             <div class="glass-panel rounded-3xl border border-white/10 overflow-hidden backdrop-blur-2xl">
                 <div class="p-6 border-b border-white/5 bg-white/5 flex justify-between items-center">
@@ -376,6 +528,18 @@
         window.addEventListener('resize', () => { lossChart.resize(); accChart.resize(); lrChart.resize(); });
 
         let lastDataLength = 0;
+        let lastTrainingData = [];
+        let lastTelemetryData = null;
+
+        const runMeta = {
+            fruit_v4_quality: { epochs: 120, batch: 8, workers: 4, patience: 25, profile: 'Full webcam profile + disk cache', model: 'YOLOv8s', imgsz: 640 },
+            fruit_v4_s_local: { epochs: 80, batch: 8, workers: 4, patience: 15, profile: 'Clean profile', model: 'YOLOv8s', imgsz: 640 },
+            fruit_v3_clean: { epochs: 60, batch: 8, workers: 0, patience: 25, profile: 'Clean profile', model: 'YOLOv8s', imgsz: 640 },
+            fruit_v3b: { epochs: 120, batch: 8, workers: 0, patience: 25, profile: 'Full profile', model: 'YOLOv8s', imgsz: 640 },
+            fruit_v3: { epochs: 120, batch: 8, workers: 0, patience: 25, profile: 'Full profile', model: 'YOLOv8s', imgsz: 640 }
+        };
+
+        const getRunMeta = () => runMeta[activeRun] || runMeta.fruit_v4_quality;
 
         // --- Delta Calculation Helper ---
         function getDeltaHtml(current, previous, isLoss = false) {
@@ -391,9 +555,25 @@
             return `<span class="${colorClass} font-bold tracking-widest text-sm">${arrow} ${sign}${diff.toFixed(3)}</span> <span class="text-nexus-text/50 ml-2">since last ep</span>`;
         }
 
+        // --- Global Active Run Name ---
+        const urlParams = new URLSearchParams(window.location.search);
+        let activeRun = urlParams.get('run') || localStorage.getItem('activeRun') || 'fruit_v4_quality';
+        
+        // Sync Selector UI
+        document.getElementById('runSelector').value = activeRun;
+
+        function changeRun(runName) {
+            activeRun = runName;
+            localStorage.setItem('activeRun', runName);
+            lastDataLength = 0; // reset cache
+            lastTrainingData = [];
+            fetchAndUpdateData();
+            fetchTelemetry();
+        }
+
         // --- Data Fetching ---
         function fetchAndUpdateData() {
-            fetch(`runs/fruit_v3b/results.csv?t=${new Date().getTime()}`)
+            fetch(`runs/${activeRun}/results.csv?t=${new Date().getTime()}`)
                 .then(response => {
                     if (!response.ok) throw new Error("CSV not found");
                     return response.text();
@@ -415,7 +595,7 @@
                 })
                 .catch(err => {
                     console.error("Fetch error:", err);
-                    document.getElementById('syncStatus').innerText = "Lost";
+                    document.getElementById('syncStatus').innerText = "Offline";
                     document.getElementById('syncStatus').parentElement.classList.replace("bg-white/5", "bg-nexus-rose/10");
                     document.getElementById('syncStatus').previousElementSibling.querySelector('.animate-ping').classList.replace("bg-nexus-emerald", "bg-nexus-rose");
                     document.getElementById('syncStatus').previousElementSibling.querySelector('.relative').classList.replace("bg-nexus-emerald", "bg-nexus-rose");
@@ -426,10 +606,12 @@
             if (!data || data.length === 0) return;
             if (data.length === lastDataLength) return;
             lastDataLength = data.length;
+            lastTrainingData = data;
 
             const epochs = [];
             const trainLoss = [], valLoss = [];
             const map50 = [], map50_95 = [], precision = [], recall = [], lr = [];
+            const meta = getRunMeta();
 
             let tableHtml = "";
             let maxMap50 = 0;
@@ -487,7 +669,7 @@
             const currentEpochNum = getCol(latest, 'epoch');
 
             // Global Progress
-            const progressPercent = Math.min(100, (currentEpochNum / 120) * 100);
+            const progressPercent = Math.min(100, (currentEpochNum / meta.epochs) * 100);
             document.getElementById('globalProgress').style.width = `${progressPercent}%`;
             document.getElementById('miniProgressBar').style.width = `${progressPercent}%`;
 
@@ -495,58 +677,40 @@
             document.getElementById('kpiBestScore').innerText = `${(maxMap50 * 100).toFixed(2)}%`;
             document.getElementById('kpiBestEpoch').innerText = `Saved at Epoch ${bestEp}`;
 
-            // Stable ETA Calculation (Median of all epochs to ignore freezes)
-            let maxSecondsLeft = -1;
-            let realSecondsLeft = -1;
-            
-            if(data.length >= 2) {
+            // Realistic ETA: use recent good epoch durations and target the configured max epoch.
+            // Ignore resume/reset jumps where Ultralytics time restarts.
+            let secondsLeft = -1;
+            let etaEpochSeconds = -1;
+            if (data.length >= 2) {
                 let epochDurations = [];
-                for(let i=1; i<data.length; i++) {
-                    const dur = getCol(data[i], 'time') - getCol(data[i-1], 'time');
-                    if(dur > 0) epochDurations.push(dur);
+                for (let i = 1; i < data.length; i++) {
+                    const dur = getCol(data[i], 'time') - getCol(data[i - 1], 'time');
+                    if (dur > 60 && dur < 1800) epochDurations.push(dur);
                 }
-                
-                let avgTimePerEpoch = 0;
-                if(epochDurations.length > 0) {
-                    epochDurations.sort((a,b) => a-b);
-                    avgTimePerEpoch = epochDurations[Math.floor(epochDurations.length / 2)]; // Median calculation
-                } else {
-                    avgTimePerEpoch = getCol(data[data.length-1], 'time') / currentEpochNum;
+                const recentDurations = epochDurations.slice(-8).sort((a, b) => a - b);
+                if (recentDurations.length > 0) {
+                    etaEpochSeconds = recentDurations[Math.floor(recentDurations.length / 2)];
+                    secondsLeft = etaEpochSeconds * Math.max(0, meta.epochs - currentEpochNum);
                 }
-                
-                maxSecondsLeft = avgTimePerEpoch * Math.max(0, 120 - currentEpochNum);
-                realSecondsLeft = avgTimePerEpoch * Math.max(0, 60 - currentEpochNum); // Assuming early stop at 60
-                
             } else if (data.length === 1 && getCol(latest, 'time') > 0 && currentEpochNum > 0) {
-                const avgTimePerEpoch = getCol(latest, 'time') / currentEpochNum;
-                maxSecondsLeft = avgTimePerEpoch * Math.max(0, 120 - currentEpochNum);
-                realSecondsLeft = avgTimePerEpoch * Math.max(0, 60 - currentEpochNum);
+                etaEpochSeconds = getCol(latest, 'time') / currentEpochNum;
+                secondsLeft = etaEpochSeconds * Math.max(0, meta.epochs - currentEpochNum);
             }
 
-            if (maxSecondsLeft === 0) {
+            if (secondsLeft === 0) {
                 document.getElementById('etaTimer').innerText = `Complete`;
-            } else if (maxSecondsLeft > 0) {
-                const maxHrs = Math.floor(maxSecondsLeft / 3600);
-                const maxMins = Math.floor((maxSecondsLeft % 3600) / 60);
-                
-                let avgEpStr = "Calculating...";
-                if (typeof avgTimePerEpoch !== 'undefined' && avgTimePerEpoch > 0) {
-                    const epMins = Math.floor(avgTimePerEpoch / 60);
-                    const epSecs = Math.floor(avgTimePerEpoch % 60);
-                    avgEpStr = `${epMins}m ${epSecs}s / epoch`;
-                }
-                
-                if (currentEpochNum < 60) {
-                    const realHrs = Math.floor(realSecondsLeft / 3600);
-                    const realMins = Math.floor((realSecondsLeft % 3600) / 60);
-                    document.getElementById('etaTimer').innerHTML = `~${realHrs}h ${realMins}m <span class="text-nexus-muted text-xs font-normal">/ Max ${maxHrs}h ${maxMins}m | ${avgEpStr}</span>`;
-                } else {
-                    document.getElementById('etaTimer').innerHTML = `Max ${maxHrs}h ${maxMins}m <span class="text-nexus-muted text-xs font-normal">| ${avgEpStr}</span>`;
-                }
+            } else if (secondsLeft > 0) {
+                const etaText = secondsToShort(secondsLeft);
+                const epText = secondsToDuration(etaEpochSeconds);
+                const finishAt = formatClockFromNow(secondsLeft);
+                document.getElementById('etaTimer').innerHTML = `~${etaText} <span class="text-nexus-muted text-xs font-normal">| ${epText}/epoch | ${finishAt}</span>`;
+            } else {
+                document.getElementById('etaTimer').innerText = `Calculating`;
             }
 
             // Update Primary KPIs
             document.getElementById('kpiEpoch').innerText = currentEpochNum;
+            document.getElementById('kpiEpochTotal').innerText = `/ ${meta.epochs}`;
             
             const currMap = getCol(latest, 'metrics/mAP50(B)') * 100;
             document.getElementById('kpiMap').innerText = `${currMap.toFixed(2)}%`;
@@ -574,8 +738,8 @@
                 ...commonChartOptions,
                 xAxis: { ...commonChartOptions.xAxis, data: epochs },
                 series: [
-                    { name: 'Train Box', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 3, color: '#e2e8f0' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(226,232,240,0.1)'}, {offset: 1, color: 'rgba(226,232,240,0)'}]) }, data: trainLoss },
-                    { name: 'Val Box', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 3, color: '#fb7185' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(251,113,133,0.1)'}, {offset: 1, color: 'rgba(251,113,133,0)'}]) }, data: valLoss }
+                    { name: 'Train Box', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#e2e8f0' }, lineStyle: { width: 3, color: '#e2e8f0' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(226,232,240,0.1)'}, {offset: 1, color: 'rgba(226,232,240,0)'}]) }, data: trainLoss },
+                    { name: 'Val Box', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#fb7185' }, lineStyle: { width: 3, color: '#fb7185' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(251,113,133,0.1)'}, {offset: 1, color: 'rgba(251,113,133,0)'}]) }, data: valLoss }
                 ]
             });
 
@@ -583,10 +747,10 @@
                 ...commonChartOptions,
                 xAxis: { ...commonChartOptions.xAxis, data: epochs },
                 series: [
-                    { name: 'mAP50', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 4, color: '#a78bfa' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(167,139,250,0.2)'}, {offset: 1, color: 'rgba(167,139,250,0)'}]) }, data: map50 },
-                    { name: 'mAP50-95', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 2, color: '#22d3ee', type: 'dashed' }, data: map50_95 },
-                    { name: 'Precision', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 2, color: '#34d399' }, data: precision },
-                    { name: 'Recall', type: 'line', smooth: 0.3, symbol: 'none', lineStyle: { width: 2, color: '#fbbf24' }, data: recall }
+                    { name: 'mAP50', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#a78bfa' }, lineStyle: { width: 4, color: '#a78bfa' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(167,139,250,0.2)'}, {offset: 1, color: 'rgba(167,139,250,0)'}]) }, data: map50 },
+                    { name: 'mAP50-95', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#22d3ee' }, lineStyle: { width: 2, color: '#22d3ee', type: 'dashed' }, data: map50_95 },
+                    { name: 'Precision', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#34d399' }, lineStyle: { width: 2, color: '#34d399' }, data: precision },
+                    { name: 'Recall', type: 'line', smooth: 0.3, symbol: 'none', itemStyle: { color: '#fbbf24' }, lineStyle: { width: 2, color: '#fbbf24' }, data: recall }
                 ]
             });
 
@@ -595,7 +759,7 @@
                 grid: { top: 20, right: 30, bottom: 20, left: 60, containLabel: true },
                 xAxis: { ...commonChartOptions.xAxis, data: epochs },
                 series: [
-                    { name: 'Learning Rate', type: 'line', smooth: 0.4, symbol: 'none', lineStyle: { width: 3, color: '#22d3ee' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(34,211,238,0.2)'}, {offset: 1, color: 'rgba(34,211,238,0)'}]) }, data: lr }
+                    { name: 'Learning Rate', type: 'line', smooth: 0.4, symbol: 'none', itemStyle: { color: '#22d3ee' }, lineStyle: { width: 3, color: '#22d3ee' }, areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(34,211,238,0.2)'}, {offset: 1, color: 'rgba(34,211,238,0)'}]) }, data: lr }
                 ]
             });
 
@@ -627,22 +791,195 @@
                     healthPanel.className = "glass-panel rounded-2xl p-5 fade-in flex flex-col justify-between border-nexus-emerald/20";
                 }
             }
+            updateStatusPage();
         }
+
+        function secondsToShort(seconds) {
+            if (!Number.isFinite(seconds) || seconds < 0) return '--';
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            if (hrs <= 0) return `${mins}m`;
+            return `${hrs}h ${mins}m`;
+        }
+
+        function formatClockFromNow(seconds) {
+            if (!Number.isFinite(seconds) || seconds < 0) return '--';
+            return new Date(Date.now() + seconds * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function percentText(value) {
+            return `${(value * 100).toFixed(2)}%`;
+        }
+
+        function updateMetricBar(id, value) {
+            const el = document.getElementById(id);
+            if (el) el.style.width = `${Math.max(0, Math.min(100, value * 100))}%`;
+        }
+
+        function secondsToDuration(seconds) {
+            if (!Number.isFinite(seconds) || seconds < 0) return '--';
+            const hrs = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
+            const secs = Math.floor(seconds % 60);
+            if (hrs > 0) return `${hrs}h ${mins}m`;
+            if (mins > 0) return `${mins}m ${secs}s`;
+            return `${secs}s`;
+        }
+
+        function updateStatusPage() {
+            const data = lastTrainingData;
+            const meta = getRunMeta();
+            document.getElementById('statusRunName').innerText = activeRun;
+
+            if (!data || data.length === 0) return;
+
+            const getCol = (row, partialName) => {
+                const key = Object.keys(row).find(k => k.includes(partialName));
+                return row[key] || 0;
+            };
+
+            const latest = data[data.length - 1];
+            const first = data[0];
+            const currentEpoch = getCol(latest, 'epoch');
+            const progress = Math.min(100, (currentEpoch / meta.epochs) * 100);
+
+            let bestMap = 0;
+            let bestEpoch = 0;
+            data.forEach(row => {
+                const curr = getCol(row, 'metrics/mAP50(B)');
+                if (curr > bestMap) {
+                    bestMap = curr;
+                    bestEpoch = getCol(row, 'epoch');
+                }
+            });
+
+            let durations = [];
+            for (let i = 1; i < data.length; i++) {
+                const dur = getCol(data[i], 'time') - getCol(data[i - 1], 'time');
+                if (dur > 60 && dur < 1800) durations.push(dur);
+            }
+            durations.sort((a, b) => a - b);
+            const recent = durations.slice(-8);
+            const speedSource = recent.length >= 3 ? recent : durations;
+            const medianEpochSeconds = speedSource.length
+                ? speedSource[Math.floor(speedSource.length / 2)]
+                : (getCol(latest, 'time') / Math.max(1, currentEpoch));
+            const secondsLeft = medianEpochSeconds * Math.max(0, meta.epochs - currentEpoch);
+            const plateauCount = Math.max(0, currentEpoch - bestEpoch);
+            const lastEpochSeconds = durations.length ? durations[durations.length - 1] : getCol(latest, 'time');
+            const fastestEpochSeconds = durations.length ? Math.min(...durations) : 0;
+            const slowestRecentSeconds = recent.length ? Math.max(...recent) : 0;
+            const elapsedSeconds = getCol(latest, 'time') >= getCol(first, 'time')
+                ? getCol(latest, 'time')
+                : currentEpoch * medianEpochSeconds;
+            const stopEpoch = Math.min(meta.epochs, bestEpoch + meta.patience);
+            const currentMap = getCol(latest, 'metrics/mAP50(B)');
+            const bestGap = currentMap - bestMap;
+            const currentLr = getCol(latest, 'lr/pg0');
+            const startLr = getCol(data.find(row => getCol(row, 'lr/pg0') > 0) || latest, 'lr/pg0');
+            const lrRemaining = startLr > 0 ? currentLr / startLr : 0;
+            const trainBox = getCol(latest, 'train/box_loss');
+            const valBox = getCol(latest, 'val/box_loss');
+            const lossGap = valBox - trainBox;
+
+            document.getElementById('statusEpoch').innerText = `${currentEpoch} / ${meta.epochs}`;
+            document.getElementById('statusProgressText').innerText = `${progress.toFixed(1)}% complete`;
+            document.getElementById('statusEta').innerText = secondsToShort(secondsLeft);
+            document.getElementById('statusFinishTime').innerText = `Finish around ${formatClockFromNow(secondsLeft)}`;
+            document.getElementById('statusEpochSpeed').innerText = `${Math.floor(medianEpochSeconds / 60)}m ${Math.floor(medianEpochSeconds % 60)}s`;
+            document.getElementById('statusTimeSource').innerText = `plateau ${plateauCount}/${meta.patience} epochs`;
+            document.getElementById('statusBestMap').innerText = percentText(bestMap);
+            document.getElementById('statusBestEpoch').innerText = `Epoch ${bestEpoch}`;
+            document.getElementById('statusNoImprove').innerText = `${plateauCount} / ${meta.patience}`;
+            document.getElementById('statusStopEpoch').innerText = `Epoch ${stopEpoch}`;
+            document.getElementById('statusRemainingEpochs').innerText = `${Math.max(0, meta.epochs - currentEpoch)} epochs`;
+            document.getElementById('statusBestGap').innerText = `${(bestGap * 100).toFixed(3)} pts`;
+            document.getElementById('statusBestGap').className = bestGap >= -0.001 ? 'font-mono text-nexus-emerald' : 'font-mono text-nexus-amber';
+            document.getElementById('statusElapsed').innerText = secondsToDuration(elapsedSeconds);
+            document.getElementById('statusLastEpochTime').innerText = secondsToDuration(lastEpochSeconds);
+            document.getElementById('statusFastestEpoch').innerText = secondsToDuration(fastestEpochSeconds);
+            document.getElementById('statusSlowestRecent').innerText = secondsToDuration(slowestRecentSeconds);
+            document.getElementById('statusLr').innerText = currentLr.toExponential(2);
+            document.getElementById('statusLrRemaining').innerText = `${(lrRemaining * 100).toFixed(1)}% of start`;
+            document.getElementById('statusLossGap').innerText = `+${lossGap.toFixed(4)}`;
+            document.getElementById('statusLossGap').className = lossGap > 0.20 ? 'font-mono text-nexus-emerald' : 'font-mono text-nexus-amber';
+            const overfitRisk = lossGap > 0.25 && plateauCount >= 4 ? 'Watch' : lossGap > 0.35 ? 'High' : 'Low';
+            document.getElementById('statusOverfitRisk').innerText = overfitRisk;
+            document.getElementById('statusOverfitRisk').className = overfitRisk === 'High' ? 'font-mono text-nexus-rose' : overfitRisk === 'Watch' ? 'font-mono text-nexus-amber' : 'font-mono text-nexus-emerald';
+
+            if (lastTelemetryData) updateStatusTelemetry(lastTelemetryData);
+        }
+
+        function updateStatusTelemetry(data) {
+            lastTelemetryData = data;
+
+            const thermal = document.getElementById('statusThermal');
+            if (data.gpu_temp_c && data.gpu_temp_c > 0) {
+                thermal.textContent = `${data.gpu_temp_c}°C`;
+                if (data.gpu_temp_c >= 90) {
+                    thermal.className = 'font-mono text-2xl font-bold text-nexus-rose animate-pulse';
+                } else if (data.gpu_temp_c >= 80) {
+                    thermal.className = 'font-mono text-2xl font-bold text-nexus-amber';
+                } else {
+                    thermal.className = 'font-mono text-2xl font-bold text-nexus-emerald';
+                }
+            } else {
+                thermal.textContent = '--°C';
+                thermal.className = 'font-mono text-2xl font-bold text-white/40';
+            }
+        }
+
+        // Detect if we're running via file:// (will block fetch) vs http://
+        const isFileProtocol = window.location.protocol === 'file:';
+        let telemetryWarningShown = false;
 
         let freezeCounter = 0;
         function fetchTelemetry() {
-            fetch(`runs/fruit_v3b/telemetry.json?t=${new Date().getTime()}`)
-                .then(res => res.json())
-                .then(data => {
-                    document.getElementById('kpiGpuUtil').innerText = `${data.gpu_util_percent}%`;
-                    document.getElementById('kpiVram').innerHTML = `${data.vram_used_gb.toFixed(1)}<span class="text-lg text-white/50">/${data.vram_total_gb.toFixed(1)}GB</span>`;
-                    document.getElementById('kpiCpuUtil').innerText = `${data.cpu_util_percent}%`;
-                    document.getElementById('kpiRam').innerHTML = `${data.ram_used_gb.toFixed(1)}<span class="text-lg text-white/50">GB</span>`;
+            if (isFileProtocol) {
+                // Can't fetch local files via file:// — show one-time warning
+                if (!telemetryWarningShown) {
+                    telemetryWarningShown = true;
+                    document.getElementById('kpiGpuUtil').textContent = 'N/A';
+                    document.getElementById('kpiCpuUtil').textContent = 'N/A';
+                    document.getElementById('kpiVram').innerHTML = '<span class="text-sm text-nexus-amber">Use HTTP</span>';
+                    document.getElementById('kpiRam').innerHTML = '<span class="text-sm text-nexus-amber">Server</span>';
+                    document.getElementById('statusThermal').textContent = 'Run via HTTP';
+                    console.warn('[Dashboard] Opened via file:// — telemetry fetch blocked. Use: http://127.0.0.1:8765/dashboard.html');
+                }
+                return;
+            }
 
-                    // Freeze Detection Logic (If GPU drops below 20% for >10 seconds during training)
-                    if (data.gpu_util_percent < 20 && document.getElementById('etaTimer').innerText !== 'Complete') {
+            fetch(`runs/${activeRun}/telemetry.json?t=${new Date().getTime()}`)
+                .then(res => {
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    return res.json();
+                })
+                .then(data => {
+                    // GPU Utilization
+                    const gpuEl = document.getElementById('kpiGpuUtil');
+                    gpuEl.textContent = `${data.gpu_util_percent}%`;
+                    gpuEl.style.color = data.gpu_util_percent >= 80 ? '#22d3ee' : data.gpu_util_percent >= 40 ? '#fbbf24' : '#94a3b8';
+
+                    // VRAM (used / total)
+                    document.getElementById('kpiVram').innerHTML =
+                        `${data.vram_used_gb.toFixed(1)}<span class="text-lg text-white/50">/${data.vram_total_gb.toFixed(1)}GB</span>`;
+
+                    // CPU Utilization
+                    const cpuEl = document.getElementById('kpiCpuUtil');
+                    cpuEl.textContent = `${data.cpu_util_percent}%`;
+                    cpuEl.style.color = data.cpu_util_percent >= 85 ? '#fb7185' : '#e2e8f0';
+
+                    // System RAM
+                    document.getElementById('kpiRam').innerHTML =
+                        `${data.ram_used_gb.toFixed(1)}<span class="text-lg text-white/50">/${data.ram_total_gb.toFixed(1)}GB</span>`;
+
+                    updateStatusTelemetry(data);
+
+                    // Freeze Detection (GPU below 20% for >10s during active training)
+                    const etaText = document.getElementById('etaTimer').innerText;
+                    if (data.gpu_util_percent < 20 && etaText !== 'Complete' && etaText !== '--:--') {
                         freezeCounter++;
-                        if (freezeCounter >= 5) { // 5 polls * 2 sec = 10 seconds of freeze
+                        if (freezeCounter >= 5) {
                             document.getElementById('freezeAlert').classList.remove('hidden');
                         }
                     } else {
@@ -650,7 +987,11 @@
                         document.getElementById('freezeAlert').classList.add('hidden');
                     }
                 })
-                .catch(err => console.log('Telemetry not available yet.'));
+                .catch(err => {
+                    // Telemetry file not yet written — silently show dashes
+                    document.getElementById('kpiGpuUtil').textContent = '--%';
+                    document.getElementById('kpiCpuUtil').textContent = '--%';
+                });
         }
 
         fetchAndUpdateData();

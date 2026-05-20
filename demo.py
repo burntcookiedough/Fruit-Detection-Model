@@ -120,15 +120,44 @@ def run_webcam(model, camera_id=0, conf=0.15, imgsz=640, enhance=True):
     dummy = np.zeros((imgsz, imgsz, 3), dtype=np.uint8)
     model(dummy, imgsz=imgsz, conf=conf, verbose=False)
 
-    # Use default backend (MSMF on Windows). We removed DSHOW because it disables 
-    # auto-exposure on some webcams, resulting in dark, red, 2-FPS video.
-    cap = cv2.VideoCapture(camera_id)
-    
-    # Force a standard HD resolution so the camera doesn't use a weird fallback mode
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    if not cap.isOpened():
-        print(f"[ERROR] Cannot open camera with ID {camera_id}. Make sure it is connected and not used by another app.")
+    # Robust Windows fallback system to handle MSMF/DirectShow and custom resolution issues
+    cap = None
+    backends_to_try = [
+        ("MSMF with 1280x720", None, True),
+        ("MSMF with default resolution", None, False),
+        ("DirectShow with 1280x720", cv2.CAP_DSHOW, True),
+        ("DirectShow with default resolution", cv2.CAP_DSHOW, False)
+    ]
+
+    for label, backend, set_res in backends_to_try:
+        print(f"[INFO] Attempting to open webcam via {label}...")
+        if backend is None:
+            temp_cap = cv2.VideoCapture(camera_id)
+        else:
+            temp_cap = cv2.VideoCapture(camera_id, backend)
+
+        if not temp_cap.isOpened():
+            print("  -> Backend initialization failed.")
+            temp_cap.release()
+            continue
+
+        if set_res:
+            temp_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            temp_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+        # Test if we can actually read a frame
+        ret, frame = temp_cap.read()
+        if ret and frame is not None and frame.size > 0:
+            print("  [OK] Successfully connected and captured a test frame!")
+            cap = temp_cap
+            break
+        else:
+            print("  -> Failed to grab frame, trying next fallback.")
+            temp_cap.release()
+
+    if cap is None:
+        print(f"[ERROR] Cannot open camera with ID {camera_id}.")
+        print("Please verify:\n1. The webcam is connected.\n2. No other app (Zoom, Teams, Discord, browser, OBS) is currently using the camera.")
         return
 
     print(f"\n[INFO] Webcam started on camera {camera_id}.")

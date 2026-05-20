@@ -1,0 +1,18 @@
+# Fruit Detection Dataset V4 - Train Balanced
+path: F:\Fruit Detection Model\dataset_v4_balanced
+
+train: train/images
+val:   valid/images
+test:  test/images
+
+nc: 8
+
+names:
+  0: apple
+  1: banana
+  2: orange
+  3: mango
+  4: pineapple
+  5: watermelon
+  6: grapes
+  7: pomegranate
