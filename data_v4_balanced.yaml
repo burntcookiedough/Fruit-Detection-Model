@@ -1,5 +1,5 @@
 # Fruit Detection Dataset V4 - Train Balanced
-path: F:\Fruit Detection Model\dataset_v4_balanced
+path: dataset_v4_balanced
 
 train: train/images
 val:   valid/images

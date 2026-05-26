@@ -14,7 +14,7 @@
 # Total training images (approx):
 #   17,876 (clean) + ~10,700 (webcam) = ~28,576
 
-path: F:\Fruit Detection Model
+path: .
 
 train:
   - dataset_v4_balanced/train/images

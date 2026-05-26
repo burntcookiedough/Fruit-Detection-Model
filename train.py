@@ -1,7 +1,7 @@
 """
 train.py — Fruit Detection Model: Training entry point.
 
-Fine-tunes a YOLOv8 model on the balanced fruit dataset (v3).
+Fine-tunes a YOLOv8 model on the balanced fruit dataset (V5).
 All hyperparameters and paths are defined in config.py.
 
 Usage
@@ -82,7 +82,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--data", type=str, default=None,
-        help="Path to data.yaml. Defaults to data_v3_clean.yaml when --clean, else data_v3.yaml.",
+        help=f"Path to data.yaml (default: {config.DATA_YAML})",
     )
     parser.add_argument(
         "--epochs", type=int, default=config.EPOCHS,
@@ -116,15 +116,6 @@ def parse_args() -> argparse.Namespace:
         "--resume", action="store_true",
         help="Resume from the last checkpoint (restores full training state).",
     )
-    parser.add_argument(
-        "--clean", action="store_true",
-        help=(
-            "Use clean dataset + reduced augmentation profile for the post-fix "
-            "debugging retrain. Switches data to data_v3_clean.yaml and augmentations "
-            "to CLEAN_AUGMENT_KWARGS (lower mosaic, no mixup, gentler scale). "
-            "Run filter_dataset.py first."
-        ),
-    )
 
     return parser.parse_args()
 
@@ -139,17 +130,9 @@ def main() -> None:
     device  = resolve_device(args.device)
     workers = resolve_workers(args.workers)
 
-    # ------------------------------------------------------------------
-    # Select augmentation profile and data yaml
-    # ------------------------------------------------------------------
-    if args.clean:
-        aug_profile  = config.CLEAN_AUGMENT_KWARGS
-        default_data = str(config.DATA_YAML_CLEAN)
-        profile_name = "clean (post-fix debugging)"
-    else:
-        aug_profile  = config.AUGMENT_KWARGS
-        default_data = str(config.DATA_YAML)
-        profile_name = "full webcam-optimised"
+    aug_profile  = config.AUGMENT_KWARGS
+    default_data = str(config.DATA_YAML)
+    profile_name = "full webcam-optimised"
 
     data_yaml = args.data if args.data is not None else default_data
 
@@ -159,7 +142,7 @@ def main() -> None:
     if not Path(data_path).exists():
         raise FileNotFoundError(
             f"data.yaml not found at: {data_path}\n"
-            "Run prepare_dataset_v3.py and balance_dataset.py first."
+            "Run the pipeline scripts in pipeline/ first."
         )
 
     print("=" * 60)
@@ -230,7 +213,7 @@ def main() -> None:
                                      # Use --resume to continue, or change --name.
             "save_period":  config.SAVE_PERIOD,
             **config.TRAIN_QUALITY_KWARGS,
-            **aug_profile,           # AUGMENT_KWARGS or CLEAN_AUGMENT_KWARGS
+            **aug_profile,           # AUGMENT_KWARGS from config
         }
 
         print(f"\n  Augmentation profile: {profile_name} (see config.py)")

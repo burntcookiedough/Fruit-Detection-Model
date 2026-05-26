@@ -3,7 +3,7 @@
 # Handles: Power Plan | Telemetry Agent | HTTP Dashboard Server | Training
 # ==============================================================================
 
-$ProjectDir = "F:\Fruit Detection Model"
+$ProjectDir = $PSScriptRoot
 $PythonExe  = "$ProjectDir\venv\Scripts\python.exe"
 $Port       = 8765
 
@@ -67,7 +67,7 @@ Write-Host "===========================================================" -Foregr
 $telemetryLog = "$ProjectDir\tmp\telemetry.log"
 $telemetryProc = Start-Process `
     -FilePath $PythonExe `
-    -ArgumentList @("telemetry.py", "--run", "fruit_v4_quality") `
+    -ArgumentList @("telemetry.py", "--run", "fruit_v5_quality") `
     -WorkingDirectory $ProjectDir `
     -NoNewWindow `
     -RedirectStandardOutput $telemetryLog `
@@ -121,12 +121,12 @@ Write-Host ""
 $trainingArgs = @(
     "train.py",
     "--model", "yolov8s.pt",
-    "--data", "data_v4_balanced.yaml",
-    "--name", "fruit_v4_quality",
+    "--data", "data_v5_webcam.yaml",
+    "--name", "fruit_v5_quality",
     "--epochs", "120",
     "--batch", "8",
-    "--patience", "25",
-    "--workers", "4"
+    "--patience", "30",
+    "--workers", "0"
 )
 
 $trainingProc = Start-Process `
@@ -162,7 +162,7 @@ Write-Host "  Dashboard URL  : http://127.0.0.1:$Port/dashboard.html" -Foregroun
 Write-Host "===========================================================" -ForegroundColor Green
 Write-Host ""
 Write-Host "  Waiting for training to complete..." -ForegroundColor Cyan
-Write-Host "  (Press Ctrl+C to abort — will also close server and telemetry)" -ForegroundColor DarkGray
+Write-Host "  Press Ctrl+C to abort - will also close server and telemetry" -ForegroundColor DarkGray
 Write-Host ""
 
 # Wait for training to finish

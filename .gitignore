@@ -61,6 +61,10 @@ _staging_*/
 # Training Runs, Outputs & Temporary Files
 # ==============================================================================
 runs/
+custom_detector_project/runs_custom/
+custom_detector_project/debug/
+custom_detector_project/cache_320/
+custom_detector_project/target_cache_320/
 output/
 export/
 inference/
@@ -117,3 +121,13 @@ $RECYCLE.BIN/
 
 # Linux
 *~
+
+# ==============================================================================
+# Command Code internals
+# ==============================================================================
+.commandcode/
+
+# ==============================================================================
+# Generated documents
+# ==============================================================================
+*.docx
