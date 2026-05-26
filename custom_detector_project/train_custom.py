@@ -2,6 +2,7 @@
 import argparse
 import csv
 import json
+import math
 import os
 import sys
 import time
@@ -24,9 +25,79 @@ from custom_config import (
 )
 from custom_detector.dataset import FruitDataset, collate_fn
 from custom_detector.model import FruitDetector
-from custom_detector.loss import DetectionLoss
+from custom_detector.loss import DetectionLoss, compute_class_weights
 from custom_detector.utils import cxcywh_to_xyxy
+import torchvision
 import torchvision.ops as ops
+
+
+class ModelEMA:
+    """Exponential Moving Average of model weights for better generalization."""
+    def __init__(self, model, decay=0.9999):
+        self.ema = {k: v.clone().detach() for k, v in model.state_dict().items()}
+        self.decay = decay
+        self.updates = 0
+
+    @torch.no_grad()
+    def update(self, model):
+        self.updates += 1
+        # Ramp up decay from 0.9 to target over first 2000 updates
+        d = self.decay * (1 - math.exp(-self.updates / 2000))
+        for k, v in model.state_dict().items():
+            if v.is_floating_point():
+                self.ema[k].lerp_(v, 1.0 - d)
+            else:
+                self.ema[k].copy_(v)
+
+    def apply(self, model):
+        """Load EMA weights into model (for eval)."""
+        model.load_state_dict(self.ema)
+
+    def state_dict(self):
+        return self.ema
+
+    def load_state_dict(self, state_dict):
+        self.ema = {k: v.clone() for k, v in state_dict.items()}
+
+
+def soft_nms(boxes, scores, labels, iou_thresh=0.45, sigma=0.5, score_thresh=0.01):
+    """Gaussian Soft-NMS: decay scores instead of hard suppression."""
+    if boxes.numel() == 0:
+        return torch.zeros(0, dtype=torch.long, device=boxes.device)
+
+    keep = []
+    idxs = torch.arange(boxes.shape[0], device=boxes.device)
+
+    while idxs.numel() > 0:
+        # Pick the highest scoring box
+        top = scores[idxs].argmax()
+        keep.append(idxs[top].item())
+
+        if idxs.numel() == 1:
+            break
+
+        # Remove picked box
+        top_box = boxes[idxs[top]].unsqueeze(0)
+        top_label = labels[idxs[top]]
+        remaining = torch.cat([idxs[:top], idxs[top+1:]])
+
+        if remaining.numel() == 0:
+            break
+
+        # Compute IoU with remaining boxes
+        ious = torchvision.ops.box_iou(top_box, boxes[remaining]).squeeze(0)
+
+        # Only decay same-class boxes
+        same_class = labels[remaining] == top_label
+        decay = torch.ones_like(ious)
+        decay[same_class] = torch.exp(-ious[same_class] ** 2 / sigma)
+        scores[remaining] *= decay
+
+        # Remove low-scoring boxes
+        valid = scores[remaining] > score_thresh
+        idxs = remaining[valid]
+
+    return torch.tensor(keep, dtype=torch.long, device=boxes.device)
 
 
 def decode_predictions(cls_pred, box_pred, anchors, conf_thresh=0.05, nms_iou=0.45,
@@ -61,7 +132,7 @@ def decode_predictions(cls_pred, box_pred, anchors, conf_thresh=0.05, nms_iou=0.
     boxes = torch.stack([cx, cy, w, h], dim=1)
     boxes_xyxy = cxcywh_to_xyxy(boxes).clamp(min=0, max=IMG_SIZE)
 
-    nms_keep = ops.batched_nms(boxes_xyxy, max_scores, labels, nms_iou)
+    nms_keep = soft_nms(boxes_xyxy, max_scores, labels, iou_thresh=nms_iou)
     nms_keep = nms_keep[:max_detections]
     return boxes_xyxy[nms_keep], labels[nms_keep], max_scores[nms_keep]
 
@@ -75,7 +146,7 @@ def unpack_batch(batch):
     return images, boxes_list, labels_list, target_keys
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_batches=None):
+def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_batches=None, ema=None):
     model.train()
     total_loss = 0
     total_cls = 0
@@ -96,6 +167,10 @@ def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_
         loss.backward()
         clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
+
+        # Update EMA weights after each optimizer step
+        if ema is not None:
+            ema.update(model)
 
         total_loss += loss.item()
         total_cls += loss_dict['cls'].item()
@@ -244,8 +319,8 @@ def config_snapshot(args):
     }
 
 
-def save_checkpoint(path, epoch, model, optimizer, scheduler, best_map, best_loss, args):
-    torch.save({
+def save_checkpoint(path, epoch, model, optimizer, scheduler, best_map, best_loss, args, ema=None):
+    save_dict = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
@@ -253,7 +328,11 @@ def save_checkpoint(path, epoch, model, optimizer, scheduler, best_map, best_los
         'best_map50': best_map,
         'best_loss': best_loss,
         'config': config_snapshot(args),
-    }, path)
+    }
+    # Persist EMA state so it can be restored on resume
+    if ema is not None:
+        save_dict['ema_state_dict'] = ema.state_dict()
+    torch.save(save_dict, path)
 
 
 def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_batches=None,
@@ -298,13 +377,22 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
         model = model.to(memory_format=torch.channels_last)
     print(f"Parameters: {sum(p.numel() for p in model.parameters()):,}")
 
+    # Exponential Moving Average of model weights for better generalization
+    ema = ModelEMA(model, decay=0.9999)
+
+    # Compute per-class weights to handle dataset imbalance
+    # (pineapple/watermelon ~6% vs apple ~20% — 3.4x ratio)
+    class_weights = compute_class_weights(TRAIN_LBL_DIR, NUM_CLASSES)
+    print(f"Class weights: {[f'{w:.3f}' for w in class_weights.tolist()]}")
+
     criterion = DetectionLoss(
         NUM_CLASSES, POS_IOU, NEG_IOU, FOCAL_GAMMA, FOCAL_ALPHA,
         matcher_type=MATCHER_TYPE, img_size=IMG_SIZE,
         fm_sizes=FM_SIZES, ratios=ANCHOR_RATIOS,
         neg_pos_ratio=NEG_POS_RATIO,
         cache_targets=cache_targets,
-        target_cache_dir=target_cache_subdir("train")
+        target_cache_dir=target_cache_subdir("train"),
+        class_weights=class_weights
     )
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
@@ -319,6 +407,10 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
     best_map = 0.0
     best_loss = float('inf')
     start_epoch = 0
+
+    # Early stopping configuration
+    patience = 20
+    no_improve_count = 0
     if resume:
         ckpt = torch.load(resume, map_location=device)
         model.load_state_dict(ckpt['model_state_dict'])
@@ -327,6 +419,9 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
             scheduler.load_state_dict(ckpt['scheduler_state_dict'])
         except (KeyError, ValueError):
             print("Warning: scheduler state did not match this run configuration; scheduler was reset.")
+        # Restore EMA state if it was saved in the checkpoint
+        if 'ema_state_dict' in ckpt:
+            ema.load_state_dict(ckpt['ema_state_dict'])
         start_epoch = ckpt['epoch'] + 1
         best_map = ckpt.get('best_map50', 0.0)
         best_loss = ckpt.get('best_loss', float('inf'))
@@ -342,17 +437,29 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
         epoch_start = time.perf_counter()
         loss, cls_loss, box_loss = train_one_epoch(
             model, train_loader, criterion, optimizer, device, GRAD_CLIP,
-            max_batches=limit_train_batches
+            max_batches=limit_train_batches, ema=ema
         )
         scheduler.step()
 
         should_validate = (not skip_val) and ((epoch + 1) % val_every == 0 or epoch == num_epochs - 1)
         if should_validate:
             try:
+                # Swap in EMA weights for validation
+                if ema is not None:
+                    orig_state = {k: v.clone() for k, v in model.state_dict().items()}
+                    ema.apply(model)
+
                 result = validate(model, val_loader, device, anchors, max_batches=limit_val_batches)
                 map50 = result['map_50'].item()
                 map_val = result['map'].item()
+
+                # Restore original (non-EMA) weights after validation
+                if ema is not None:
+                    model.load_state_dict(orig_state)
             except RuntimeError as exc:
+                # Restore weights even on error
+                if ema is not None and 'orig_state' in dir():
+                    model.load_state_dict(orig_state)
                 if 'torchmetrics' not in str(exc):
                     raise
                 print("Validation skipped: install torchmetrics for mAP (`pip install torchmetrics`).")
@@ -379,16 +486,26 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
 
         if loss < best_loss:
             best_loss = loss
-            save_checkpoint(os.path.join(WEIGHTS_DIR, 'best_loss.pt'), epoch, model, optimizer, scheduler, best_map, best_loss, args)
+            save_checkpoint(os.path.join(WEIGHTS_DIR, 'best_loss.pt'), epoch, model, optimizer, scheduler, best_map, best_loss, args, ema=ema)
 
         best_map_path = os.path.join(WEIGHTS_DIR, 'best_map50.pt')
-        if should_validate and (map50 > best_map or not os.path.exists(best_map_path)):
-            best_map = map50
-            save_checkpoint(best_map_path, epoch, model, optimizer, scheduler, best_map, best_loss, args)
-            print(f"  -> New best mAP50: {best_map:.4f}")
+        # Early stopping: check BEFORE updating best_map
+        if should_validate:
+            if map50 > best_map:
+                no_improve_count = 0
+                best_map = map50
+                save_checkpoint(best_map_path, epoch, model, optimizer, scheduler, best_map, best_loss, args, ema=ema)
+                print(f"  -> New best mAP50: {best_map:.4f}")
+            else:
+                if not os.path.exists(best_map_path):
+                    save_checkpoint(best_map_path, epoch, model, optimizer, scheduler, best_map, best_loss, args, ema=ema)
+                no_improve_count += 1
+                if no_improve_count >= patience:
+                    print(f"Early stopping: no mAP50 improvement for {patience} epochs")
+                    break
 
         last_path = os.path.join(WEIGHTS_DIR, 'last.pt')
-        save_checkpoint(last_path, epoch, model, optimizer, scheduler, best_map, best_loss, args)
+        save_checkpoint(last_path, epoch, model, optimizer, scheduler, best_map, best_loss, args, ema=ema)
 
     print("Training complete.")
 

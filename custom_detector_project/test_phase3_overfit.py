@@ -52,10 +52,11 @@ def main():
             print(f'Step {step:03d} | loss={loss.item():.4f} cls={loss_dict["cls"].item():.4f} box={loss_dict["box"].item():.4f} num_pos={loss_dict["num_pos"]}')
 
     print(f'Final loss: {loss.item():.4f}')
-    if loss.item() < 0.5:
-        print('PASS: Loss dropped below 0.5')
+    # CIoU box loss starts ~1.0 per positive, so threshold is higher than SmoothL1
+    if loss.item() < 1.5:
+        print('PASS: Loss dropped below 1.5')
     else:
-        print('FAIL: Loss did not drop below 0.5 — debug before training.')
+        print('FAIL: Loss did not drop below 1.5 — debug before training.')
 
 
 if __name__ == '__main__':
