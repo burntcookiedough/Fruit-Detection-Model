@@ -63,7 +63,8 @@ class FocalLoss(nn.Module):
             is_pos = class_ids >= 0
             per_anchor_weight = torch.ones_like(loss)
             if is_pos.any():
-                per_anchor_weight[is_pos] = self.class_weights[class_ids[is_pos]]
+                cw = self.class_weights.to(loss.device)
+                per_anchor_weight[is_pos] = cw[class_ids[is_pos]]
             loss = loss * per_anchor_weight
 
         if reduction == 'none':
@@ -85,6 +86,7 @@ def _decode_box_pred(box_pred, anchors):
     return torch.stack([cx, cy, w, h], dim=1)
 
 
+@torch.amp.autocast('cuda', enabled=False)
 def ciou_loss(pred_cxcywh, target_cxcywh, img_size):
     """Complete IoU loss between predicted and target boxes (both in cxcywh).
 
@@ -92,6 +94,9 @@ def ciou_loss(pred_cxcywh, target_cxcywh, img_size):
     where v measures aspect ratio consistency.
     Returns per-box loss = 1 - CIoU, clamped to [0, 4].
     """
+    # Ensure float32 for numerical stability
+    pred_cxcywh = pred_cxcywh.float()
+    target_cxcywh = target_cxcywh.float()
     # Convert to xyxy for IoU computation
     pred_xyxy = cxcywh_to_xyxy(pred_cxcywh).clamp(min=0, max=img_size)
     target_xyxy = cxcywh_to_xyxy(target_cxcywh).clamp(min=0, max=img_size)
@@ -207,66 +212,80 @@ class DetectionLoss(nn.Module):
         B = cls_pred.shape[0]
         device = cls_pred.device
         num_classes = cls_pred.shape[2]
-        cls_loss_total = torch.tensor(0.0, device=device)
-        box_loss_total = torch.tensor(0.0, device=device)
-        num_pos_total = 0
+        num_anchors = anchors.shape[0]
+
+        # Phase 1: Compute all targets (still per-image due to variable GT count)
+        all_cls_targets = []
+        all_box_targets = []
+        all_pos_masks = []
+        all_neg_masks = []
 
         for b in range(B):
             gt_boxes = gt_boxes_list[b].to(device)
             gt_labels = gt_labels_list[b].to(device)
-
             target_key = target_keys[b] if target_keys is not None else None
-            cls_targets, box_targets, pos_mask, neg_mask = self._get_targets(
-                anchors, gt_boxes, gt_labels, target_key
-            )
+            ct, bt, pm, nm = self._get_targets(anchors, gt_boxes, gt_labels, target_key)
+            all_cls_targets.append(ct)
+            all_box_targets.append(bt)
+            all_pos_masks.append(pm)
+            all_neg_masks.append(nm)
 
-            valid_mask = pos_mask | neg_mask
-            if valid_mask.sum() == 0:
-                continue
+        # Stack into batch tensors [B, N] and [B, N, 4]
+        cls_targets = torch.stack(all_cls_targets)
+        box_targets = torch.stack(all_box_targets)
+        pos_mask = torch.stack(all_pos_masks)
+        neg_mask = torch.stack(all_neg_masks)
 
-            # Build binary targets [N, C]
-            binary_targets = torch.zeros((anchors.shape[0], num_classes), dtype=torch.float32, device=device)
-            binary_targets[pos_mask, cls_targets[pos_mask]] = 1.0
+        # Phase 2: Batched classification loss
+        valid_mask = pos_mask | neg_mask  # [B, N]
 
-            # --- Classification loss (with per-class weighting for imbalanced data) ---
-            # Pass class IDs so FocalLoss can apply per-class weights to positives
-            valid_class_ids = cls_targets[valid_mask]  # -1 for negatives, 0..C-1 for positives
-            per_anchor_cls = self.focal(
-                cls_pred[b][valid_mask], binary_targets[valid_mask],
-                reduction='none', class_ids=valid_class_ids
-            )
-            valid_pos = pos_mask[valid_mask]
-            pos_cls = per_anchor_cls[valid_pos].sum()
-            neg_cls_all = per_anchor_cls[~valid_pos]
+        # Build binary targets [B, N, C] — vectorized one-hot
+        binary_targets = torch.zeros(B, num_anchors, num_classes, dtype=torch.float32, device=device)
+        pos_b, pos_n = pos_mask.nonzero(as_tuple=True)
+        if pos_b.numel() > 0:
+            binary_targets[pos_b, pos_n, cls_targets[pos_b, pos_n]] = 1.0
 
-            if self.neg_pos_ratio <= 0:
-                # Use ALL negatives — let Focal Loss handle class imbalance natively
-                neg_cls = neg_cls_all.sum()
+        # Flatten valid entries and compute focal loss in one call
+        valid_cls_pred = cls_pred[valid_mask]        # [V, C]
+        valid_bt = binary_targets[valid_mask]          # [V, C]
+        valid_class_ids = cls_targets[valid_mask]      # [V]
+
+        if valid_cls_pred.numel() == 0:
+            zero = torch.tensor(0.0, device=device)
+            return {'total': zero, 'cls': zero, 'box': zero, 'num_pos': 0}
+
+        per_anchor_cls = self.focal(valid_cls_pred, valid_bt, reduction='none', class_ids=valid_class_ids)
+
+        # Separate positive and negative losses
+        valid_pos_flat = pos_mask[valid_mask]  # [V] bool
+        pos_cls = per_anchor_cls[valid_pos_flat].sum()
+
+        if self.neg_pos_ratio <= 0:
+            neg_cls = per_anchor_cls[~valid_pos_flat].sum()
+        else:
+            neg_cls_all = per_anchor_cls[~valid_pos_flat]
+            num_pos_total_for_ratio = max(int(pos_mask.sum().item()), 1)
+            max_neg = self.neg_pos_ratio * num_pos_total_for_ratio
+            max_neg = min(max_neg, neg_cls_all.numel())
+            if max_neg > 0:
+                neg_cls = neg_cls_all.topk(max_neg).values.sum()
             else:
-                # Hard negative mining with capped ratio
-                max_neg = self.neg_pos_ratio * max(int(pos_mask.sum().item()), 1)
-                max_neg = min(max_neg, neg_cls_all.numel())
-                if max_neg > 0:
-                    neg_cls = neg_cls_all.topk(max_neg).values.sum()
-                else:
-                    neg_cls = torch.tensor(0.0, device=device)
-            cls_loss_total += pos_cls + neg_cls
+                neg_cls = torch.tensor(0.0, device=device)
 
-            # --- Box regression loss (CIoU) ---
-            if pos_mask.sum() > 0:
-                # Decode predicted offsets back to absolute cxcywh boxes
-                pred_boxes_abs = _decode_box_pred(box_pred[b][pos_mask], anchors[pos_mask])
-                # Decode target offsets back to absolute cxcywh boxes
-                target_boxes_abs = _decode_box_pred(box_targets[pos_mask], anchors[pos_mask])
-                # CIoU loss (per-box), then sum
-                box_loss = ciou_loss(pred_boxes_abs, target_boxes_abs, self.img_size).sum()
-                box_loss_total += box_loss
-                num_pos_total += pos_mask.sum().item()
+        cls_loss_total = pos_cls + neg_cls
 
-        if num_pos_total == 0:
-            return {'total': cls_loss_total, 'cls': cls_loss_total, 'box': box_loss_total, 'num_pos': 0}
+        # Phase 3: Batched box regression loss (CIoU)
+        num_pos_total = pos_mask.sum().item()
+        if num_pos_total > 0:
+            # Expand anchors to [B, N, 4] for batched indexing
+            anchors_exp = anchors.unsqueeze(0).expand(B, -1, -1)
+            pred_boxes_abs = _decode_box_pred(box_pred[pos_mask], anchors_exp[pos_mask])
+            target_boxes_abs = _decode_box_pred(box_targets[pos_mask], anchors_exp[pos_mask])
+            box_loss_total = ciou_loss(pred_boxes_abs, target_boxes_abs, self.img_size).sum()
+        else:
+            box_loss_total = torch.tensor(0.0, device=device)
 
-        cls_loss_norm = cls_loss_total / num_pos_total
-        box_loss_norm = box_loss_total / num_pos_total
+        cls_loss_norm = cls_loss_total / max(num_pos_total, 1)
+        box_loss_norm = box_loss_total / max(num_pos_total, 1)
         total = cls_loss_norm + box_loss_norm
         return {'total': total, 'cls': cls_loss_norm, 'box': box_loss_norm, 'num_pos': num_pos_total}

@@ -1,0 +1,12 @@
+Device: cuda
+DataLoader workers: 2
+Parameters: 3,454,284
+Class weights: ['0.728', '0.947', '0.755', '0.804', '1.332', '1.335', '0.850', '1.249']
+Epoch 1/100 | loss=1.4124 cls=0.8209 box=0.5915 | mAP50=0.0000 mAP=nan | time=873.8s
+Epoch 2/100 | loss=1.1058 cls=0.6189 box=0.4869 | mAP50=0.0000 mAP=nan | time=751.9s
+Epoch 3/100 | loss=1.0233 cls=0.5671 box=0.4562 | mAP50=0.0000 mAP=nan | time=735.7s
+Epoch 4/100 | loss=0.9825 cls=0.5425 box=0.4400 | mAP50=0.0000 mAP=nan | time=733.9s
+Epoch 5/100 | loss=0.9556 cls=0.5257 box=0.4299 | mAP50=0.2691 mAP=0.1267 | time=886.6s
+  -> New best mAP50: 0.2691
+Epoch 6/100 | loss=0.9311 cls=0.5118 box=0.4193 | mAP50=0.2691 mAP=nan | time=717.6s
+Epoch 7/100 | loss=0.8942 cls=0.4910 box=0.4032 | mAP50=0.2691 mAP=nan | time=732.7s

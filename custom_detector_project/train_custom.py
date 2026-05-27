@@ -6,6 +6,11 @@ import math
 import os
 import sys
 import time
+import warnings
+
+# Suppress harmless PIL transparency warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="PIL")
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import torch
@@ -32,9 +37,17 @@ import torchvision.ops as ops
 
 
 class ModelEMA:
-    """Exponential Moving Average of model weights for better generalization."""
+    """Exponential Moving Average of model weights for better generalization.
+    
+    Maintains a separate copy of model weights (no weight-swapping needed).
+    Use self.ema_model directly for validation/inference.
+    """
     def __init__(self, model, decay=0.9999):
-        self.ema = {k: v.clone().detach() for k, v in model.state_dict().items()}
+        import copy
+        self.ema_model = copy.deepcopy(model)
+        self.ema_model.eval()
+        for p in self.ema_model.parameters():
+            p.requires_grad_(False)
         self.decay = decay
         self.updates = 0
 
@@ -43,27 +56,29 @@ class ModelEMA:
         self.updates += 1
         # Ramp up decay from 0.9 to target over first 2000 updates
         d = self.decay * (1 - math.exp(-self.updates / 2000))
-        for k, v in model.state_dict().items():
-            if v.is_floating_point():
-                self.ema[k].lerp_(v, 1.0 - d)
-            else:
-                self.ema[k].copy_(v)
-
-    def apply(self, model):
-        """Load EMA weights into model (for eval)."""
-        model.load_state_dict(self.ema)
+        for ema_p, model_p in zip(self.ema_model.parameters(), model.parameters()):
+            ema_p.lerp_(model_p.detach(), 1.0 - d)
+        # Also update buffers (e.g. BatchNorm running stats)
+        for ema_b, model_b in zip(self.ema_model.buffers(), model.buffers()):
+            ema_b.copy_(model_b)
 
     def state_dict(self):
-        return self.ema
+        return self.ema_model.state_dict()
 
     def load_state_dict(self, state_dict):
-        self.ema = {k: v.clone() for k, v in state_dict.items()}
+        self.ema_model.load_state_dict(state_dict)
 
 
 def soft_nms(boxes, scores, labels, iou_thresh=0.45, sigma=0.5, score_thresh=0.01):
     """Gaussian Soft-NMS: decay scores instead of hard suppression."""
     if boxes.numel() == 0:
         return torch.zeros(0, dtype=torch.long, device=boxes.device)
+
+    # Move to CPU to avoid expensive CPU-GPU synchronization inside the loop
+    orig_device = boxes.device
+    boxes = boxes.cpu()
+    scores = scores.cpu()
+    labels = labels.cpu()
 
     keep = []
     idxs = torch.arange(boxes.shape[0], device=boxes.device)
@@ -97,7 +112,7 @@ def soft_nms(boxes, scores, labels, iou_thresh=0.45, sigma=0.5, score_thresh=0.0
         valid = scores[remaining] > score_thresh
         idxs = remaining[valid]
 
-    return torch.tensor(keep, dtype=torch.long, device=boxes.device)
+    return torch.tensor(keep, dtype=torch.long, device=orig_device)
 
 
 def decode_predictions(cls_pred, box_pred, anchors, conf_thresh=0.05, nms_iou=0.45,
@@ -132,7 +147,7 @@ def decode_predictions(cls_pred, box_pred, anchors, conf_thresh=0.05, nms_iou=0.
     boxes = torch.stack([cx, cy, w, h], dim=1)
     boxes_xyxy = cxcywh_to_xyxy(boxes).clamp(min=0, max=IMG_SIZE)
 
-    nms_keep = soft_nms(boxes_xyxy, max_scores, labels, iou_thresh=nms_iou)
+    nms_keep = ops.nms(boxes_xyxy, max_scores, iou_threshold=nms_iou)
     nms_keep = nms_keep[:max_detections]
     return boxes_xyxy[nms_keep], labels[nms_keep], max_scores[nms_keep]
 
@@ -146,12 +161,16 @@ def unpack_batch(batch):
     return images, boxes_list, labels_list, target_keys
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_batches=None, ema=None):
+def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_batches=None, ema=None, scaler=None):
     model.train()
     total_loss = 0
     total_cls = 0
     total_box = 0
     num_batches = 0
+    use_amp = scaler is not None
+    
+    loader_len = len(loader)
+    
     for batch_idx, batch in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
@@ -159,14 +178,23 @@ def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_
         images = images.to(device, non_blocking=True)
         if device.type == 'cuda':
             images = images.contiguous(memory_format=torch.channels_last)
-        cls_pred, box_pred, anchors = model(images)
-        loss_dict = criterion(cls_pred, box_pred, anchors, boxes_list, labels_list, target_keys)
-        loss = loss_dict['total']
+
+        with torch.autocast(device_type='cuda', enabled=use_amp):
+            cls_pred, box_pred, anchors = model(images)
+            loss_dict = criterion(cls_pred, box_pred, anchors, boxes_list, labels_list, target_keys)
+            loss = loss_dict['total']
 
         optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            clip_grad_norm_(model.parameters(), grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            clip_grad_norm_(model.parameters(), grad_clip)
+            optimizer.step()
 
         # Update EMA weights after each optimizer step
         if ema is not None:
@@ -176,6 +204,11 @@ def train_one_epoch(model, loader, criterion, optimizer, device, grad_clip, max_
         total_cls += loss_dict['cls'].item()
         total_box += loss_dict['box'].item()
         num_batches += 1
+        
+        if num_batches % 20 == 0 or num_batches == loader_len:
+            print(f"  Batch {num_batches}/{loader_len} - loss: {total_loss/num_batches:.4f}", end='\r')
+            
+    print() # Clear the newline
     return total_loss / num_batches, total_cls / num_batches, total_box / num_batches
 
 
@@ -336,7 +369,7 @@ def save_checkpoint(path, epoch, model, optimizer, scheduler, best_map, best_los
 
 
 def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_batches=None,
-         val_every=1, skip_val=False, cache_images=False, workers=NUM_WORKERS,
+         val_every=5, skip_val=False, cache_images=False, workers=NUM_WORKERS,
          prefetch_factor=PREFETCH_FACTOR, persistent_workers=PERSISTENT_WORKERS,
          build_cache=False, overwrite_cache=False, cache_targets=False, args=None):
     if limit_train_batches is not None and limit_train_batches < 1:
@@ -393,8 +426,11 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
         cache_targets=cache_targets,
         target_cache_dir=target_cache_subdir("train"),
         class_weights=class_weights
-    )
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+
+    # AMP: mixed precision for 2-4x speedup on RTX GPUs with Tensor Cores
+    scaler = torch.GradScaler('cuda') if device.type == 'cuda' else None
 
     warmup_epochs = min(WARMUP_EPOCHS, max(num_epochs - 1, 0))
     if warmup_epochs > 0:
@@ -437,29 +473,19 @@ def main(num_epochs=NUM_EPOCHS, resume='', limit_train_batches=None, limit_val_b
         epoch_start = time.perf_counter()
         loss, cls_loss, box_loss = train_one_epoch(
             model, train_loader, criterion, optimizer, device, GRAD_CLIP,
-            max_batches=limit_train_batches, ema=ema
+            max_batches=limit_train_batches, ema=ema, scaler=scaler
         )
         scheduler.step()
 
         should_validate = (not skip_val) and ((epoch + 1) % val_every == 0 or epoch == num_epochs - 1)
         if should_validate:
             try:
-                # Swap in EMA weights for validation
-                if ema is not None:
-                    orig_state = {k: v.clone() for k, v in model.state_dict().items()}
-                    ema.apply(model)
-
-                result = validate(model, val_loader, device, anchors, max_batches=limit_val_batches)
+                # Use EMA model directly for validation (no weight swap needed)
+                val_model = ema.ema_model if ema is not None else model
+                result = validate(val_model, val_loader, device, anchors, max_batches=limit_val_batches)
                 map50 = result['map_50'].item()
                 map_val = result['map'].item()
-
-                # Restore original (non-EMA) weights after validation
-                if ema is not None:
-                    model.load_state_dict(orig_state)
             except RuntimeError as exc:
-                # Restore weights even on error
-                if ema is not None and 'orig_state' in dir():
-                    model.load_state_dict(orig_state)
                 if 'torchmetrics' not in str(exc):
                     raise
                 print("Validation skipped: install torchmetrics for mAP (`pip install torchmetrics`).")
@@ -516,7 +542,7 @@ if __name__ == '__main__':
     parser.add_argument('--resume', type=str, default='')
     parser.add_argument('--limit-train-batches', type=int, default=None)
     parser.add_argument('--limit-val-batches', type=int, default=None)
-    parser.add_argument('--val-every', type=int, default=1)
+    parser.add_argument('--val-every', type=int, default=5)
     parser.add_argument('--skip-val', action='store_true')
     parser.add_argument('--cache-images', action='store_true')
     parser.add_argument('--cache-targets', action='store_true')

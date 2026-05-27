@@ -4,7 +4,7 @@ import random
 import numpy as np
 import torch
 from torch.utils.data import Dataset
-from PIL import Image, ImageFilter
+from PIL import Image
 import torchvision.transforms.functional as TF
 
 # ImageNet channel-wise normalization constants
@@ -30,6 +30,25 @@ class FruitDataset(Dataset):
         if not self.img_files:
             raise RuntimeError(f"No images found in: {img_dir}")
 
+        # Pre-load all labels into memory (they're tiny text files)
+        self._labels = []
+        for fname in self.img_files:
+            stem = os.path.splitext(fname)[0]
+            lbl_path = os.path.join(self.lbl_dir, stem + '.txt')
+            boxes = []
+            labels = []
+            if os.path.exists(lbl_path):
+                with open(lbl_path, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split()
+                        if len(parts) == 5:
+                            boxes.append([float(parts[1]), float(parts[2]), float(parts[3]), float(parts[4])])
+                            labels.append(int(parts[0]))
+            self._labels.append({
+                'boxes': np.array(boxes, dtype=np.float32) if boxes else np.zeros((0, 4), dtype=np.float32),
+                'labels': np.array(labels, dtype=np.int64) if labels else np.zeros((0,), dtype=np.int64),
+            })
+
     def __len__(self):
         return len(self.img_files)
 
@@ -49,6 +68,18 @@ class FruitDataset(Dataset):
         img = Image.open(img_path).convert('RGB')
         img = img.resize((self.img_size, self.img_size), Image.BILINEAR)
         return TF.to_tensor(img)
+
+    def _get_labels(self, idx):
+        """Get pre-loaded labels for image at idx, scaled to pixel coordinates."""
+        entry = self._labels[idx]
+        boxes = torch.tensor(entry['boxes'], dtype=torch.float32)
+        labels = torch.tensor(entry['labels'], dtype=torch.long)
+        if boxes.numel() > 0:
+            boxes[:, 0] *= self.img_size  # cx
+            boxes[:, 1] *= self.img_size  # cy
+            boxes[:, 2] *= self.img_size  # w
+            boxes[:, 3] *= self.img_size  # h
+        return boxes, labels
 
     def build_cache(self, overwrite=False, verbose=True):
         if not self.cache_dir:
@@ -89,22 +120,10 @@ class FruitDataset(Dataset):
 
         for i, idx_i in enumerate(indices):
             img_i = self.load_image(self.img_files[idx_i])
-            lbl_path = os.path.join(self.lbl_dir, os.path.splitext(self.img_files[idx_i])[0] + '.txt')
-            boxes_i = []
-            labels_i = []
-            if os.path.exists(lbl_path):
-                with open(lbl_path, 'r') as f:
-                    for line in f:
-                        parts = line.strip().split()
-                        if len(parts) == 5:
-                            cls_id = int(parts[0])
-                            bx = float(parts[1]) * img_size
-                            by = float(parts[2]) * img_size
-                            bw = float(parts[3]) * img_size
-                            bh = float(parts[4]) * img_size
-                            if bw > 0 and bh > 0:
-                                boxes_i.append([bx, by, bw, bh])
-                                labels_i.append(cls_id)
+            boxes_i, labels_i = self._get_labels(idx_i)
+            # Convert to lists for iteration
+            boxes_list_i = boxes_i.tolist() if boxes_i.numel() > 0 else []
+            labels_list_i = labels_i.tolist() if labels_i.numel() > 0 else []
 
             _, h, w = img_i.shape
             # Place each quadrant
@@ -124,7 +143,7 @@ class FruitDataset(Dataset):
             mosaic_img[:, y1s:y1e, x1s:x1e] = img_i[:, y2s:y2e, x2s:x2e]
 
             # Shift boxes: convert cxcywh to xyxy, shift, clip, convert back
-            for bi, (bx, by, bw, bh) in enumerate(boxes_i):
+            for bi, (bx, by, bw, bh) in enumerate(boxes_list_i):
                 # Original box in xyxy
                 ox1 = bx - bw / 2
                 oy1 = by - bh / 2
@@ -144,7 +163,7 @@ class FruitDataset(Dataset):
                     new_w = nx2 - nx1
                     new_h = ny2 - ny1
                     all_boxes.append([new_cx, new_cy, new_w, new_h])
-                    all_labels.append(labels_i[bi])
+                    all_labels.append(labels_list_i[bi])
 
         boxes = torch.tensor(all_boxes, dtype=torch.float32) if all_boxes else torch.zeros((0, 4), dtype=torch.float32)
         labels = torch.tensor(all_labels, dtype=torch.long) if all_labels else torch.zeros((0,), dtype=torch.long)
@@ -157,49 +176,39 @@ class FruitDataset(Dataset):
         if self.augment and random.random() < 0.5:
             img, boxes, labels = self._mosaic(idx)
         else:
-            # Standard single-image path with label loading
-            lbl_path = os.path.join(self.lbl_dir, os.path.splitext(fname)[0] + '.txt')
-
-            boxes = []
-            labels = []
-            if os.path.exists(lbl_path):
-                with open(lbl_path, 'r') as f:
-                    for line in f:
-                        parts = line.strip().split()
-                        if len(parts) == 5:
-                            cls_id = int(parts[0])
-                            cx = float(parts[1]) * self.img_size
-                            cy = float(parts[2]) * self.img_size
-                            w = float(parts[3]) * self.img_size
-                            h = float(parts[4]) * self.img_size
-                            if w > 0 and h > 0:
-                                boxes.append([cx, cy, w, h])
-                                labels.append(cls_id)
-
-            boxes = torch.tensor(boxes, dtype=torch.float32) if boxes else torch.zeros((0, 4), dtype=torch.float32)
-            labels = torch.tensor(labels, dtype=torch.long) if labels else torch.zeros((0,), dtype=torch.long)
-
+            # Use pre-loaded labels (no file I/O)
+            boxes, labels = self._get_labels(idx)
             img = self.load_image(fname)
 
         flipped = False
 
         if self.augment:
-            # Existing augmentations: horizontal flip, color jitter, blur
+            # Horizontal flip
             if random.random() < 0.5:
-                img = TF.hflip(img)
+                img = torch.flip(img, dims=[2])
                 flipped = True
                 if boxes.numel() > 0:
                     boxes[:, 0] = self.img_size - boxes[:, 0]
+
+            # Color jitter — pure tensor operations (no PIL conversion)
             if random.random() < 0.3:
-                img = TF.adjust_brightness(img, random.uniform(0.7, 1.3))
+                factor = random.uniform(0.7, 1.3)
+                img = (img * factor).clamp(0, 1)
+
             if random.random() < 0.3:
-                img = TF.adjust_contrast(img, random.uniform(0.7, 1.3))
+                factor = random.uniform(0.7, 1.3)
+                mean = img.mean(dim=[1, 2], keepdim=True)
+                img = ((img - mean) * factor + mean).clamp(0, 1)
+
             if random.random() < 0.3:
-                img = TF.adjust_saturation(img, random.uniform(0.7, 1.3))
+                factor = random.uniform(0.7, 1.3)
+                gray = img.mean(dim=0, keepdim=True)
+                img = (img * factor + gray * (1 - factor)).clamp(0, 1)
+
             if random.random() < 0.1:
-                img = TF.to_pil_image(img)
-                img = img.filter(ImageFilter.GaussianBlur(radius=random.choice([1, 2])))
-                img = TF.to_tensor(img)
+                kernel_size = random.choice([3, 5])
+                sigma = random.uniform(0.5, 1.5)
+                img = TF.gaussian_blur(img, kernel_size=[kernel_size, kernel_size], sigma=[sigma, sigma])
 
             # Cutout: erase a random rectangular patch (30% probability)
             if random.random() < 0.3:
@@ -212,7 +221,7 @@ class FruitDataset(Dataset):
 
             # Random vertical flip (10% probability)
             if random.random() < 0.1:
-                img = TF.vflip(img)
+                img = torch.flip(img, dims=[1])
                 if boxes.numel() > 0:
                     boxes[:, 1] = self.img_size - boxes[:, 1]
 
